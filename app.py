@@ -553,6 +553,9 @@ def main() -> None:
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
     aspect_ratio = st.selectbox("アスペクト比", ASPECT_RATIO_CHOICES, index=0)
+    reference_images = st.file_uploader(
+        "リファレンス画像 (任意、複数可)", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True
+    )
     if st.button("Generate", type="primary"):
         if not api_key:
             st.warning("Gemini API key が設定されていません。Streamlit secrets などで設定してください。")
@@ -560,6 +563,15 @@ def main() -> None:
         if not prompt.strip():
             st.warning("プロンプトを入力してください。")
             st.stop()
+
+        reference_parts: List[Dict[str, object]] = []
+        if reference_images:
+            for ref in reference_images:
+                ref_bytes = ref.getvalue()
+                if not ref_bytes:
+                    continue
+                ref_mime = ref.type or "image/png"
+                reference_parts.append({"inline_data": {"mime_type": ref_mime, "data": ref_bytes}})
 
         client = genai.Client(api_key=api_key.strip())
         stripped_prompt = prompt.rstrip()
@@ -569,11 +581,17 @@ def main() -> None:
         prompt_components.extend([DEFAULT_PROMPT_SUFFIX, NO_TEXT_TOGGLE_SUFFIX])
         prompt_for_request = "\n".join(prompt_components)
 
+        contents_payload: object
+        if reference_parts:
+            contents_payload = [{"role": "user", "parts": [{"text": prompt_for_request}, *reference_parts]}]
+        else:
+            contents_payload = prompt_for_request
+
         with st.spinner("画像を生成しています..."):
             try:
                 response = client.models.generate_content(
                     model=MODEL_NAME,
-                    contents=prompt_for_request,
+                    contents=contents_payload,
                     config=types.GenerateContentConfig(
                         response_modalities=["TEXT", "IMAGE"],
                         image_config=types.ImageConfig(aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO),
