@@ -303,6 +303,7 @@ def collect_image_bytes(response: object) -> Optional[bytes]:
             "media",
             "image",
             "images",
+            "generated_images",
         ):
             value = getattr(current, attr, None)
             if value is not None:
@@ -583,39 +584,64 @@ def main() -> None:
         prompt_components.extend([DEFAULT_PROMPT_SUFFIX, NO_TEXT_TOGGLE_SUFFIX])
         prompt_for_request = "\n".join(prompt_components)
 
-        contents_payload: object
+        # 画像入力がある場合は generate_content（解像度指定は非対応）、テキストのみなら generate_images で image_size を渡す
         if reference_parts:
-            contents_payload = [{"role": "user", "parts": [{"text": prompt_for_request}, *reference_parts]}]
+            contents_payload: object = [{"role": "user", "parts": [{"text": prompt_for_request}, *reference_parts]}]
+            with st.spinner("画像を生成しています..."):
+                try:
+                    response = client.models.generate_content(
+                        model=MODEL_NAME,
+                        contents=contents_payload,
+                        config=types.GenerateContentConfig(
+                            response_modalities=["TEXT", "IMAGE"],
+                            image_config=types.ImageConfig(aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO),
+                        ),
+                    )
+                except google_exceptions.ResourceExhausted:
+                    st.error(
+                        "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
+                        "しばらく待つか、Google AI Studio で利用状況と請求設定を確認してください。"
+                    )
+                    st.info("https://ai.google.dev/gemini-api/docs/rate-limits")
+                    st.stop()
+                except google_exceptions.GoogleAPICallError as exc:
+                    st.error(f"API 呼び出しに失敗しました: {exc.message}")
+                    st.stop()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"予期しないエラーが発生しました: {exc}")
+                    st.stop()
+
+            image_bytes = collect_image_bytes(response)
         else:
-            contents_payload = prompt_for_request
+            with st.spinner("画像を生成しています..."):
+                try:
+                    response = client.models.generate_images(
+                        model=MODEL_NAME,
+                        prompt=prompt_for_request,
+                        config=types.GenerateImagesConfig(
+                            aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO, image_size=resolution
+                        ),
+                    )
+                except google_exceptions.ResourceExhausted:
+                    st.error(
+                        "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
+                        "しばらく待つか、Google AI Studio で利用状況と請求設定を確認してください。"
+                    )
+                    st.info("https://ai.google.dev/gemini-api/docs/rate-limits")
+                    st.stop()
+                except google_exceptions.GoogleAPICallError as exc:
+                    st.error(f"API 呼び出しに失敗しました: {exc.message}")
+                    st.stop()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"予期しないエラーが発生しました: {exc}")
+                    st.stop()
 
-        generation_config: Dict[str, object] = {
-            "response_modalities": ["TEXT", "IMAGE"],
-            "image_config": {"aspect_ratio": aspect_ratio or IMAGE_ASPECT_RATIO, "resolution": resolution},
-        }
-
-        with st.spinner("画像を生成しています..."):
-            try:
-                response = client.models.generate_content(
-                    model=MODEL_NAME,
-                    contents=contents_payload,
-                    config=generation_config,
-                )
-            except google_exceptions.ResourceExhausted:
-                st.error(
-                    "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
-                    "しばらく待つか、Google AI Studio で利用状況と請求設定を確認してください。"
-                )
-                st.info("https://ai.google.dev/gemini-api/docs/rate-limits")
-                st.stop()
-            except google_exceptions.GoogleAPICallError as exc:
-                st.error(f"API 呼び出しに失敗しました: {exc.message}")
-                st.stop()
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"予期しないエラーが発生しました: {exc}")
-                st.stop()
-
-        image_bytes = collect_image_bytes(response)
+            image_bytes = None
+            if getattr(response, "generated_images", None):
+                first = response.generated_images[0]
+                img_obj = getattr(first, "image", None)
+                if img_obj and getattr(img_obj, "image_bytes", None):
+                    image_bytes = img_obj.image_bytes
         if not image_bytes:
             st.error("画像データを取得できませんでした。")
             st.stop()
