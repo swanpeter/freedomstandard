@@ -57,6 +57,7 @@ TITLE = "Gemini 画像生成"
 MODEL_NAME = "models/gemini-3-pro-image-preview"
 IMAGE_ASPECT_RATIO = "16:9"
 ASPECT_RATIO_CHOICES: Tuple[str, ...] = ("16:9", "9:16", "1:1")
+RESOLUTION_CHOICES: Tuple[str, ...] = ("1K", "2K", "4K")
 DEFAULT_PROMPT_SUFFIX = (
     "((masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus))"
 )
@@ -553,6 +554,7 @@ def main() -> None:
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
     aspect_ratio = st.selectbox("アスペクト比", ASPECT_RATIO_CHOICES, index=0)
+    resolution = st.selectbox("解像度", RESOLUTION_CHOICES, index=0)
     reference_images = st.file_uploader(
         "リファレンス画像 (任意、複数可)", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True
     )
@@ -587,15 +589,17 @@ def main() -> None:
         else:
             contents_payload = prompt_for_request
 
+        generation_config: Dict[str, object] = {
+            "response_modalities": ["TEXT", "IMAGE"],
+            "image_config": {"aspect_ratio": aspect_ratio or IMAGE_ASPECT_RATIO, "resolution": resolution},
+        }
+
         with st.spinner("画像を生成しています..."):
             try:
                 response = client.models.generate_content(
                     model=MODEL_NAME,
                     contents=contents_payload,
-                    config=types.GenerateContentConfig(
-                        response_modalities=["TEXT", "IMAGE"],
-                        image_config=types.ImageConfig(aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO),
-                    ),
+                    config=generation_config,
                 )
             except google_exceptions.ResourceExhausted:
                 st.error(
