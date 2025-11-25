@@ -54,11 +54,11 @@ def rerun_app() -> None:
 
 
 TITLE = "Gemini 画像生成"
-DEFAULT_MODEL_NAME = "gemini-3-pro-image-preview"
+DEFAULT_MODEL_NAME = "models/gemini-3-pro-image-preview"
 MODEL_OPTIONS: Tuple[Tuple[str, str], ...] = (
-    ("Gemini 3 Pro Image Preview (1K)", "gemini-3-pro-image-preview"),
-    ("Gemini 3 Pro Image Preview 2K", "gemini-3-pro-image-preview-2K"),
-    ("Gemini 3 Pro Image Preview 4K", "gemini-3-pro-image-preview-4K"),
+    ("Gemini 3 Pro Image Preview (1K)", "models/gemini-3-pro-image-preview"),
+    ("Gemini 3 Pro Image Preview 2K", "models/gemini-3-pro-image-preview-2K"),
+    ("Gemini 3 Pro Image Preview 4K", "models/gemini-3-pro-image-preview-4K"),
 )
 IMAGE_ASPECT_RATIO = "16:9"
 ASPECT_RATIO_CHOICES: Tuple[str, ...] = ("16:9", "9:16", "1:1")
