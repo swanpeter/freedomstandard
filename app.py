@@ -1,4 +1,6 @@
 import base64
+import datetime
+import io
 import os
 import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -17,6 +19,7 @@ try:
     from google import genai
     from google.api_core import exceptions as google_exceptions
     from google.genai import types
+    from google.cloud import storage
 except ImportError:
     st.error(
         "必要なライブラリが不足しています。`pip install -r requirements.txt` を実行してください。"
@@ -54,15 +57,8 @@ def rerun_app() -> None:
 
 
 TITLE = "Gemini 画像生成"
-DEFAULT_MODEL_NAME = "models/gemini-3-pro-image-preview"
-MODEL_OPTIONS: Tuple[Tuple[str, str], ...] = (
-    ("Gemini 3 Pro Image Preview (1K)", "models/gemini-3-pro-image-preview"),
-    ("Gemini 3 Pro Image Preview 2K", "models/gemini-3-pro-image-preview-2K"),
-    ("Gemini 3 Pro Image Preview 4K", "models/gemini-3-pro-image-preview-4K"),
-)
+MODEL_NAME = "models/gemini-3-pro-image-preview"
 IMAGE_ASPECT_RATIO = "16:9"
-ASPECT_RATIO_CHOICES: Tuple[str, ...] = ("16:9", "9:16", "1:1")
-RESOLUTION_CHOICES: Tuple[str, ...] = ("1K", "2K", "4K")
 DEFAULT_PROMPT_SUFFIX = (
     "((masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus))"
 )
@@ -308,7 +304,6 @@ def collect_image_bytes(response: object) -> Optional[bytes]:
             "media",
             "image",
             "images",
-            "generated_images",
         ):
             value = getattr(current, attr, None)
             if value is not None:
@@ -331,6 +326,142 @@ def collect_text_parts(response: object) -> List[str]:
             if text:
                 texts.append(text)
     return texts
+
+
+def _get_from_container(container: object, key: str) -> Optional[Any]:
+    if container is None:
+        return None
+    if isinstance(container, dict):
+        return container.get(key)
+    getter = getattr(container, "get", None)
+    if callable(getter):
+        try:
+            return getter(key)
+        except TypeError:
+            try:
+                return getter(key, None)
+            except TypeError:
+                return None
+    try:
+        return getattr(container, key)
+    except AttributeError:
+        return None
+
+
+def sanitize_filename_component(value: str, max_length: int = 80) -> str:
+    text = value or ""
+    sanitized_chars: List[str] = []
+    for char in text:
+        if char in {"\n", "\r"}:
+            sanitized_chars.append("-n-")
+            continue
+        if ord(char) < 32:
+            continue
+        if char in {'\\', '/', ':', '*', '?', '"', '<', '>', '|'}:
+            continue
+        if char.isspace():
+            sanitized_chars.append("_")
+            continue
+        sanitized_chars.append(char)
+    sanitized = "".join(sanitized_chars).strip("_")
+    if not sanitized:
+        sanitized = "prompt"
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length]
+    return sanitized
+
+
+def build_prompt_based_filename(prompt_text: str) -> str:
+    prompt_component = sanitize_filename_component(prompt_text or "prompt", max_length=80)
+    unique_suffix = uuid.uuid4().hex
+    return f"user06_{prompt_component}_{unique_suffix}.png"
+
+
+def upload_image_to_gcs(
+    image_bytes: bytes,
+    filename_prefix: str = "gemini_image",
+    object_name: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    if not image_bytes:
+        return None, None
+
+    try:
+        secrets_obj = st.secrets
+    except StreamlitSecretNotFoundError:
+        st.warning("GCPの設定が見つからないためアップロードをスキップしました。")
+        return None, None
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"GCPの設定取得時にエラーが発生しました: {exc}")
+        return None, None
+
+    gcp_section = None
+    if isinstance(secrets_obj, dict):
+        gcp_section = secrets_obj.get("gcp")
+    else:
+        gcp_section = _get_from_container(secrets_obj, "gcp")
+
+    if not gcp_section:
+        st.warning("GCPの設定が見つからないためアップロードをスキップしました。")
+        return None, None
+
+    bucket_name = _get_from_container(gcp_section, "bucket_name")
+    service_account_json = _get_from_container(gcp_section, "service_account_json")
+    project_id = _get_from_container(gcp_section, "project_id")
+
+    if not bucket_name or not service_account_json:
+        st.warning("GCPの設定のうち bucket_name または service_account_json が不足しています。")
+        return None, None
+
+    service_account_info: Optional[Dict[str, Any]] = None
+    if isinstance(service_account_json, (dict,)):
+        service_account_info = dict(service_account_json)
+    elif isinstance(service_account_json, (str, bytes)):
+        raw_json = service_account_json.decode("utf-8") if isinstance(service_account_json, bytes) else service_account_json
+        raw_json = raw_json.strip()
+        try:
+            service_account_info = json.loads(raw_json)
+        except json.JSONDecodeError:
+            try:
+                service_account_info = json.loads(raw_json, strict=False)
+            except json.JSONDecodeError as exc:
+                st.error(f"service_account_json の読み込みに失敗しました: {exc}")
+                return None, None
+    else:
+        st.error("service_account_json の形式が不明です。文字列または辞書で設定してください。")
+        return None, None
+
+    if not isinstance(service_account_info, dict):
+        st.error("service_account_json の内容が辞書形式ではありません。")
+        return None, None
+
+    try:
+        storage_client = storage.Client.from_service_account_info(
+            service_account_info,
+            project=str(project_id) if project_id else None,
+        )
+        bucket = storage_client.bucket(str(bucket_name))
+        if object_name:
+            cleaned_object_name = object_name.strip()
+            if not cleaned_object_name.lower().endswith(".png"):
+                cleaned_object_name = f"{cleaned_object_name}.png"
+            cleaned_object_name = cleaned_object_name.replace("/", "_").replace("\\", "_")
+            filename = f"images/{cleaned_object_name}"
+        else:
+            timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            filename = f"images/{filename_prefix}_{timestamp}_{uuid.uuid4().hex}.png"
+        blob = bucket.blob(filename)
+        blob.upload_from_file(io.BytesIO(image_bytes), content_type="image/png")
+
+        gcs_path = f"gs://{bucket.name}/{filename}"
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(hours=1),
+            method="GET",
+        )
+        return gcs_path, signed_url
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"GCSへのアップロードに失敗しました: {exc}")
+        return None, None
 
 
 def init_history() -> None:
@@ -559,15 +690,6 @@ def main() -> None:
     api_key = load_configured_api_key()
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
-    model_labels = [option[0] for option in MODEL_OPTIONS]
-    model_map = {option[0]: option[1] for option in MODEL_OPTIONS}
-    selected_model_label = st.selectbox("モデル", model_labels, index=0)
-    model_name = model_map.get(selected_model_label, DEFAULT_MODEL_NAME)
-    aspect_ratio = st.selectbox("アスペクト比", ASPECT_RATIO_CHOICES, index=0)
-    resolution = st.selectbox("解像度", RESOLUTION_CHOICES, index=0)
-    reference_images = st.file_uploader(
-        "リファレンス画像 (任意、複数可)", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True
-    )
     if st.button("Generate", type="primary"):
         if not api_key:
             st.warning("Gemini API key が設定されていません。Streamlit secrets などで設定してください。")
@@ -575,15 +697,6 @@ def main() -> None:
         if not prompt.strip():
             st.warning("プロンプトを入力してください。")
             st.stop()
-
-        reference_parts: List[Dict[str, object]] = []
-        if reference_images:
-            for ref in reference_images:
-                ref_bytes = ref.getvalue()
-                if not ref_bytes:
-                    continue
-                ref_mime = ref.type or "image/png"
-                reference_parts.append({"inline_data": {"mime_type": ref_mime, "data": ref_bytes}})
 
         client = genai.Client(api_key=api_key.strip())
         stripped_prompt = prompt.rstrip()
@@ -593,85 +706,46 @@ def main() -> None:
         prompt_components.extend([DEFAULT_PROMPT_SUFFIX, NO_TEXT_TOGGLE_SUFFIX])
         prompt_for_request = "\n".join(prompt_components)
 
-        # 画像入力がある場合は generate_content（解像度指定は非対応）、テキストのみなら generate_images で image_size を渡す
-        if reference_parts:
-            contents_payload: object = [{"role": "user", "parts": [{"text": prompt_for_request}, *reference_parts]}]
-            with st.spinner("画像を生成しています..."):
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=contents_payload,
-                        config=types.GenerateContentConfig(
-                            response_modalities=["TEXT", "IMAGE"],
-                            image_config=types.ImageConfig(aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO),
-                        ),
-                    )
-                except google_exceptions.NotFound:
-                    st.error(
-                        f"モデル {model_name} は利用できません。Google AI Studio で有効なモデル名を確認してください。"
-                    )
-                    st.stop()
-                except google_exceptions.ResourceExhausted:
-                    st.error(
-                        "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
-                        "しばらく待つか、Google AI Studio で利用状況と請求設定を確認してください。"
-                    )
-                    st.info("https://ai.google.dev/gemini-api/docs/rate-limits")
-                    st.stop()
-                except google_exceptions.GoogleAPICallError as exc:
-                    st.error(f"API 呼び出しに失敗しました: {exc.message}")
-                    st.stop()
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"予期しないエラーが発生しました: {exc}")
-                    st.stop()
+        with st.spinner("画像を生成しています..."):
+            try:
+                response = client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=prompt_for_request,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["TEXT", "IMAGE"],
+                        image_config=types.ImageConfig(aspect_ratio=IMAGE_ASPECT_RATIO),
+                    ),
+                )
+            except google_exceptions.ResourceExhausted:
+                st.error(
+                    "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
+                    "しばらく待つか、Google AI Studio で利用状況と請求設定を確認してください。"
+                )
+                st.info("https://ai.google.dev/gemini-api/docs/rate-limits")
+                st.stop()
+            except google_exceptions.GoogleAPICallError as exc:
+                st.error(f"API 呼び出しに失敗しました: {exc.message}")
+                st.stop()
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"予期しないエラーが発生しました: {exc}")
+                st.stop()
 
-            image_bytes = collect_image_bytes(response)
-        else:
-            with st.spinner("画像を生成しています..."):
-                try:
-                    response = client.models.generate_images(
-                        model=model_name,
-                        prompt=prompt_for_request,
-                        config=types.GenerateImagesConfig(
-                            aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO, image_size=resolution
-                        ),
-                    )
-                except google_exceptions.NotFound:
-                    st.error(
-                        f"モデル {model_name} は利用できません。Google AI Studio で有効なモデル名を確認してください。"
-                    )
-                    st.stop()
-                except google_exceptions.ResourceExhausted:
-                    st.error(
-                        "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
-                        "しばらく待つか、Google AI Studio で利用状況と請求設定を確認してください。"
-                    )
-                    st.info("https://ai.google.dev/gemini-api/docs/rate-limits")
-                    st.stop()
-                except google_exceptions.GoogleAPICallError as exc:
-                    st.error(f"API 呼び出しに失敗しました: {exc.message}")
-                    st.stop()
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"予期しないエラーが発生しました: {exc}")
-                    st.stop()
-
-            image_bytes = None
-            if getattr(response, "generated_images", None):
-                first = response.generated_images[0]
-                img_obj = getattr(first, "image", None)
-                if img_obj and getattr(img_obj, "image_bytes", None):
-                    image_bytes = img_obj.image_bytes
+        image_bytes = collect_image_bytes(response)
         if not image_bytes:
             st.error("画像データを取得できませんでした。")
             st.stop()
+
+        user_prompt = prompt.strip()
+        object_name = build_prompt_based_filename(user_prompt)
+        upload_image_to_gcs(image_bytes, object_name=object_name)
 
         st.session_state.history.insert(
             0,
             {
                 "id": f"img_{uuid.uuid4().hex}",
                 "image_bytes": image_bytes,
-                "prompt": prompt.strip(),
-                "model": model_name,
+                "prompt": user_prompt,
+                "model": MODEL_NAME,
                 "no_text": True,
             },
         )
