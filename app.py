@@ -54,7 +54,12 @@ def rerun_app() -> None:
 
 
 TITLE = "Gemini 画像生成"
-MODEL_NAME = "models/gemini-3-pro-image-preview"
+DEFAULT_MODEL_NAME = "models/gemini-3-pro-image-preview"
+MODEL_OPTIONS: Tuple[Tuple[str, str], ...] = (
+    ("Gemini 3 Pro Image Preview (1K)", "models/gemini-3-pro-image-preview"),
+    ("Gemini 3 Pro Image Preview 2K", "models/gemini-3-pro-image-preview-2K"),
+    ("Gemini 3 Pro Image Preview 4K", "models/gemini-3-pro-image-preview-4K"),
+)
 IMAGE_ASPECT_RATIO = "16:9"
 ASPECT_RATIO_CHOICES: Tuple[str, ...] = ("16:9", "9:16", "1:1")
 RESOLUTION_CHOICES: Tuple[str, ...] = ("1K", "2K", "4K")
@@ -554,6 +559,10 @@ def main() -> None:
     api_key = load_configured_api_key()
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
+    model_labels = [option[0] for option in MODEL_OPTIONS]
+    model_map = {option[0]: option[1] for option in MODEL_OPTIONS}
+    selected_model_label = st.selectbox("モデル", model_labels, index=0)
+    model_name = model_map.get(selected_model_label, DEFAULT_MODEL_NAME)
     aspect_ratio = st.selectbox("アスペクト比", ASPECT_RATIO_CHOICES, index=0)
     resolution = st.selectbox("解像度", RESOLUTION_CHOICES, index=0)
     reference_images = st.file_uploader(
@@ -590,7 +599,7 @@ def main() -> None:
             with st.spinner("画像を生成しています..."):
                 try:
                     response = client.models.generate_content(
-                        model=MODEL_NAME,
+                        model=model_name,
                         contents=contents_payload,
                         config=types.GenerateContentConfig(
                             response_modalities=["TEXT", "IMAGE"],
@@ -616,7 +625,7 @@ def main() -> None:
             with st.spinner("画像を生成しています..."):
                 try:
                     response = client.models.generate_images(
-                        model=MODEL_NAME,
+                        model=model_name,
                         prompt=prompt_for_request,
                         config=types.GenerateImagesConfig(
                             aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO, image_size=resolution
@@ -652,7 +661,7 @@ def main() -> None:
                 "id": f"img_{uuid.uuid4().hex}",
                 "image_bytes": image_bytes,
                 "prompt": prompt.strip(),
-                "model": MODEL_NAME,
+                "model": model_name,
                 "no_text": True,
             },
         )
