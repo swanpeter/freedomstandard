@@ -77,7 +77,7 @@ def require_login() -> None:
     if st.button("ログイン"):
         if user == correct_user and pw == correct_pass:
             st.session_state.auth = True
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("ID または PASS が違います")
 
