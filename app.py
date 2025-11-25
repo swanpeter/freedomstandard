@@ -606,6 +606,11 @@ def main() -> None:
                             image_config=types.ImageConfig(aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO),
                         ),
                     )
+                except google_exceptions.NotFound:
+                    st.error(
+                        f"モデル {model_name} は利用できません。Google AI Studio で有効なモデル名を確認してください。"
+                    )
+                    st.stop()
                 except google_exceptions.ResourceExhausted:
                     st.error(
                         "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
@@ -631,6 +636,11 @@ def main() -> None:
                             aspect_ratio=aspect_ratio or IMAGE_ASPECT_RATIO, image_size=resolution
                         ),
                     )
+                except google_exceptions.NotFound:
+                    st.error(
+                        f"モデル {model_name} は利用できません。Google AI Studio で有効なモデル名を確認してください。"
+                    )
+                    st.stop()
                 except google_exceptions.ResourceExhausted:
                     st.error(
                         "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
