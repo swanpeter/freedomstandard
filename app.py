@@ -203,6 +203,28 @@ def decode_image_data(data: Optional[object]) -> Optional[bytes]:
     return None
 
 
+def _load_uploaded_file(upload) -> Tuple[Optional[bytes], Optional[str]]:
+    if upload is None:
+        return None, None
+    try:
+        data = upload.read()
+    except Exception:
+        return None, None
+    mime_type = None
+    if hasattr(upload, "type") and upload.type:
+        mime_type = str(upload.type)
+    else:
+        name = getattr(upload, "name", "") or getattr(upload, "filename", "")
+        lower = str(name).lower()
+        if lower.endswith(".png"):
+            mime_type = "image/png"
+        elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
+            mime_type = "image/jpeg"
+        elif lower.endswith(".webp"):
+            mime_type = "image/webp"
+    return data if data else None, mime_type
+
+
 def extract_parts(candidate: object) -> Sequence:
     content = getattr(candidate, "content", None)
     parts = getattr(content, "parts", None) if content is not None else None
@@ -837,6 +859,10 @@ def main() -> None:
     api_key = load_configured_api_key()
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
+    uploaded_ref = st.file_uploader("Reference image (任意)", type=["png", "jpg", "jpeg", "webp"])
+    ref_bytes, ref_mime = _load_uploaded_file(uploaded_ref)
+    if ref_bytes:
+        st.image(ref_bytes, caption="Reference preview", use_column_width=True)
     aspect_ratio = st.radio(
         "アスペクト比",
         IMAGE_ASPECT_RATIO_OPTIONS,
@@ -859,11 +885,25 @@ def main() -> None:
         prompt_components.extend([DEFAULT_PROMPT_SUFFIX, NO_TEXT_TOGGLE_SUFFIX])
         prompt_for_request = "\n".join(prompt_components)
 
+        contents_for_request: object
+        if ref_bytes:
+            contents_for_request = [
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_bytes(data=ref_bytes, mime_type=ref_mime or "image/png"),
+                        types.Part.from_text(prompt_for_request),
+                    ],
+                )
+            ]
+        else:
+            contents_for_request = prompt_for_request
+
         with st.spinner("画像を生成しています..."):
             try:
                 response = client.models.generate_content(
                     model=MODEL_NAME,
-                    contents=prompt_for_request,
+                    contents=contents_for_request,
                     config=types.GenerateContentConfig(
                         response_modalities=["TEXT", "IMAGE"],
                         image_config=types.ImageConfig(aspect_ratio=aspect_ratio),
@@ -901,6 +941,7 @@ def main() -> None:
                 "model": MODEL_NAME,
                 "no_text": True,
                 "aspect_ratio": aspect_ratio,
+                "reference_used": bool(ref_bytes),
             },
         )
         st.success("生成完了")
