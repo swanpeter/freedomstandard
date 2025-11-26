@@ -895,15 +895,10 @@ def main() -> None:
 
         contents_for_request: object
         if ref_bytes:
-            contents_for_request = [
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_bytes(data=ref_bytes, mime_type=ref_mime or "image/png"),
-                        types.Part.from_text(prompt_for_request),
-                    ],
-                )
-            ]
+            # Use explicit constructors for compatibility across SDK versions.
+            img_part = types.Part(inline_data=types.Blob(data=ref_bytes, mime_type=ref_mime or "image/png"))
+            text_part = types.Part(text=prompt_for_request)
+            contents_for_request = [types.Content(role="user", parts=[img_part, text_part])]
         else:
             contents_for_request = prompt_for_request
 
