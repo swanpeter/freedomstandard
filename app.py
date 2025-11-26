@@ -59,6 +59,7 @@ def rerun_app() -> None:
 TITLE = "Gemini 画像生成"
 MODEL_NAME = "models/gemini-3-pro-image-preview"
 IMAGE_ASPECT_RATIO = "16:9"
+IMAGE_ASPECT_RATIO_OPTIONS = ("16:9", "9:16", "1:1")
 DEFAULT_PROMPT_SUFFIX = (
     "((masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus))"
 )
@@ -690,6 +691,11 @@ def main() -> None:
     api_key = load_configured_api_key()
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
+    aspect_ratio = st.selectbox(
+        "アスペクト比",
+        IMAGE_ASPECT_RATIO_OPTIONS,
+        index=IMAGE_ASPECT_RATIO_OPTIONS.index(IMAGE_ASPECT_RATIO),
+    )
     if st.button("Generate", type="primary"):
         if not api_key:
             st.warning("Gemini API key が設定されていません。Streamlit secrets などで設定してください。")
@@ -713,7 +719,7 @@ def main() -> None:
                     contents=prompt_for_request,
                     config=types.GenerateContentConfig(
                         response_modalities=["TEXT", "IMAGE"],
-                        image_config=types.ImageConfig(aspect_ratio=IMAGE_ASPECT_RATIO),
+                        image_config=types.ImageConfig(aspect_ratio=aspect_ratio),
                     ),
                 )
             except google_exceptions.ResourceExhausted:
