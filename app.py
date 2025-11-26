@@ -838,6 +838,8 @@ def render_history() -> None:
         model_name = entry.get("model")
         if model_name:
             meta_bits.append(f"Model: {model_name}")
+        if entry.get("reference_used"):
+            meta_bits.append("Ref: yes")
         if meta_bits:
             st.caption(" / ".join(meta_bits))
 
@@ -867,6 +869,12 @@ def main() -> None:
         "アスペクト比",
         IMAGE_ASPECT_RATIO_OPTIONS,
         index=IMAGE_ASPECT_RATIO_OPTIONS.index(IMAGE_ASPECT_RATIO),
+        horizontal=True,
+    )
+    upscale_choice = st.radio(
+        "アップスケール",
+        ("なし", "x2", "x4"),
+        index=0,
         horizontal=True,
     )
     if st.button("Generate", type="primary"):
@@ -944,6 +952,8 @@ def main() -> None:
                 "reference_used": bool(ref_bytes),
             },
         )
+        if upscale_choice in {"x2", "x4"}:
+            handle_upscale(st.session_state.history[0], upscale_choice)
         st.success("生成完了")
 
     render_history()
