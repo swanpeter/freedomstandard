@@ -856,7 +856,7 @@ def main() -> None:
     init_history()
     require_login()
 
-    st.title("脳内大喜利")
+    st.title("FreedomStandard")
 
     api_key = load_configured_api_key()
 
