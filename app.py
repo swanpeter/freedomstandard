@@ -20,6 +20,9 @@ try:
     from google.api_core import exceptions as google_exceptions
     from google.genai import types
     from google.cloud import storage
+    from google.cloud import aiplatform
+    from google.oauth2 import service_account
+    from vertexai.vision_models import ImageGenerationModel, Image as VertexImage
 except ImportError:
     st.error(
         "必要なライブラリが不足しています。`pip install -r requirements.txt` を実行してください。"
@@ -60,6 +63,7 @@ TITLE = "Gemini 画像生成"
 MODEL_NAME = "models/gemini-3-pro-image-preview"
 IMAGE_ASPECT_RATIO = "16:9"
 IMAGE_ASPECT_RATIO_OPTIONS = ("16:9", "9:16", "1:1")
+IMAGEN_MODEL_NAME = "imagegeneration@002"
 DEFAULT_PROMPT_SUFFIX = (
     "((masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus))"
 )
@@ -347,6 +351,83 @@ def _get_from_container(container: object, key: str) -> Optional[Any]:
         return getattr(container, key)
     except AttributeError:
         return None
+
+
+def _parse_service_account_info(raw: object) -> Optional[Dict[str, Any]]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, (str, bytes)):
+        raw_json = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        raw_json = raw_json.strip()
+        if not raw_json:
+            return None
+        try:
+            return json.loads(raw_json)
+        except json.JSONDecodeError:
+            try:
+                return json.loads(raw_json, strict=False)
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def load_vertex_ai_settings() -> Tuple[Optional[str], Optional[str], Optional[object]]:
+    try:
+        secrets_obj = st.secrets
+    except StreamlitSecretNotFoundError:
+        secrets_obj = None
+    except Exception:
+        secrets_obj = None
+
+    gcp_section = None
+    if isinstance(secrets_obj, dict):
+        gcp_section = secrets_obj.get("gcp")
+    else:
+        gcp_section = _get_from_container(secrets_obj, "gcp")
+
+    project_id = _get_from_container(gcp_section, "project_id") if gcp_section else None
+    region = _get_from_container(gcp_section, "region") if gcp_section else None
+    service_account_json = _get_from_container(gcp_section, "service_account_json") if gcp_section else None
+
+    project_id = (
+        _normalize_credential(str(project_id)) if project_id is not None else None
+    ) or _normalize_credential(os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT") or os.getenv("PROJECT_ID"))
+    region = _normalize_credential(str(region)) if region is not None else _normalize_credential(
+        os.getenv("VERTEX_REGION") or os.getenv("GCP_REGION") or os.getenv("REGION")
+    )
+
+    credentials_obj = None
+    service_account_info = _parse_service_account_info(service_account_json)
+    if service_account_info:
+        try:
+            credentials_obj = service_account.Credentials.from_service_account_info(service_account_info)
+        except Exception:
+            credentials_obj = None
+
+    return project_id, region, credentials_obj
+
+
+def upscale_image_with_imagen(
+    img_bytes: bytes,
+    project_id: str,
+    region: str,
+    upscale_factor: str = "x2",
+    credentials: Optional[object] = None,
+) -> bytes:
+    if not img_bytes:
+        raise ValueError("img_bytes が空です。アップスケールできません。")
+
+    if upscale_factor not in ("x2", "x4"):
+        raise ValueError("upscale_factor は 'x2' または 'x4' を指定してください。")
+
+    if not project_id or not region:
+        raise ValueError("project_id または region が指定されていません。")
+
+    aiplatform.init(project=project_id, location=region, credentials=credentials)
+    model = ImageGenerationModel.from_pretrained(IMAGEN_MODEL_NAME)
+    vertex_img = VertexImage(image_bytes=img_bytes)
+    upscaled_image = model.upscale_image(image=vertex_img, upscale_factor=upscale_factor)
+    return upscaled_image._image_bytes
 
 
 def sanitize_filename_component(value: str, max_length: int = 80) -> str:
@@ -658,6 +739,54 @@ def render_clickable_image(image_bytes: bytes, element_id: str) -> None:
     )
 
 
+def handle_upscale(entry: Dict[str, object], upscale_factor: str) -> None:
+    image_bytes = entry.get("image_bytes")
+    if not image_bytes:
+        st.error("画像データが見つかりません。")
+        return
+
+    project_id, region, credentials_obj = load_vertex_ai_settings()
+    if not project_id or not region:
+        st.warning("Vertex AI の設定（project_id, region）が不足しています。")
+        return
+
+    with st.spinner(f"アップスケール中... ({upscale_factor})"):
+        try:
+            upscaled_bytes = upscale_image_with_imagen(
+                image_bytes,
+                project_id=project_id,
+                region=region,
+                upscale_factor=upscale_factor,
+                credentials=credentials_obj,
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"アップスケールに失敗しました: {exc}")
+            return
+
+    if not upscaled_bytes:
+        st.error("アップスケール結果を取得できませんでした。")
+        return
+
+    upload_image_to_gcs(
+        upscaled_bytes,
+        object_name=build_prompt_based_filename(entry.get("prompt", "")),
+    )
+
+    st.session_state.history.insert(
+        0,
+        {
+            "id": f"img_{uuid.uuid4().hex}",
+            "image_bytes": upscaled_bytes,
+            "prompt": entry.get("prompt", ""),
+            "model": IMAGEN_MODEL_NAME,
+            "upscale_factor": upscale_factor,
+            "aspect_ratio": entry.get("aspect_ratio"),
+            "source_image_id": entry.get("id"),
+        },
+    )
+    st.success(f"アップスケール完了 ({upscale_factor})")
+
+
 def render_history() -> None:
     if not st.session_state.history:
         return
@@ -678,6 +807,23 @@ def render_history() -> None:
             st.text(prompt_display)
         else:
             st.text("(未入力)")
+        meta_bits: List[str] = []
+        aspect_ratio = entry.get("aspect_ratio")
+        if aspect_ratio:
+            meta_bits.append(f"Aspect: {aspect_ratio}")
+        if entry.get("upscale_factor"):
+            meta_bits.append(f"Upscaled: {entry['upscale_factor']}")
+        model_name = entry.get("model")
+        if model_name:
+            meta_bits.append(f"Model: {model_name}")
+        if meta_bits:
+            st.caption(" / ".join(meta_bits))
+
+        col1, col2 = st.columns(2)
+        if col1.button("Upscale x2", key=f"upscale_x2_{image_id}"):
+            handle_upscale(entry, "x2")
+        if col2.button("Upscale x4", key=f"upscale_x4_{image_id}"):
+            handle_upscale(entry, "x4")
         st.divider()
 
 
@@ -691,11 +837,15 @@ def main() -> None:
     api_key = load_configured_api_key()
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
-    aspect_ratio = st.selectbox(
+<<<<<<< ours
+    aspect_ratio = st.radio(
         "アスペクト比",
         IMAGE_ASPECT_RATIO_OPTIONS,
         index=IMAGE_ASPECT_RATIO_OPTIONS.index(IMAGE_ASPECT_RATIO),
+        horizontal=True,
     )
+=======
+>>>>>>> theirs
     if st.button("Generate", type="primary"):
         if not api_key:
             st.warning("Gemini API key が設定されていません。Streamlit secrets などで設定してください。")
@@ -719,7 +869,7 @@ def main() -> None:
                     contents=prompt_for_request,
                     config=types.GenerateContentConfig(
                         response_modalities=["TEXT", "IMAGE"],
-                        image_config=types.ImageConfig(aspect_ratio=aspect_ratio),
+                        image_config=types.ImageConfig(aspect_ratio=IMAGE_ASPECT_RATIO),
                     ),
                 )
             except google_exceptions.ResourceExhausted:
@@ -753,6 +903,7 @@ def main() -> None:
                 "prompt": user_prompt,
                 "model": MODEL_NAME,
                 "no_text": True,
+                "aspect_ratio": aspect_ratio,
             },
         )
         st.success("生成完了")
