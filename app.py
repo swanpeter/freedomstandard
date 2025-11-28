@@ -80,6 +80,25 @@ DEFAULT_GEMINI_API_KEY = (
 )
 
 
+def _is_truthy(value: Optional[object]) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def is_gcs_upload_enabled() -> bool:
+    raw = get_secret_value("ENABLE_GCS_UPLOAD")
+    if raw is None:
+        raw = os.getenv("ENABLE_GCS_UPLOAD")
+    return _is_truthy(raw)
+
+
 def _normalize_credential(value: Optional[str]) -> Optional[str]:
     if isinstance(value, str):
         stripped = value.strip()
@@ -486,6 +505,9 @@ def upload_image_to_gcs(
     filename_prefix: str = "gemini_image",
     object_name: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
+    if not is_gcs_upload_enabled():
+        st.info("GCS へのアップロードは無効化されています。")
+        return None, None
     if not image_bytes:
         return None, None
 
@@ -863,8 +885,6 @@ def main() -> None:
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
     uploaded_ref = st.file_uploader("Reference image (任意)", type=["png", "jpg", "jpeg", "webp"])
     ref_bytes, ref_mime = _load_uploaded_file(uploaded_ref)
-    if ref_bytes:
-        st.image(ref_bytes, caption="Reference preview", use_column_width=True)
     aspect_ratio = st.radio(
         "アスペクト比",
         IMAGE_ASPECT_RATIO_OPTIONS,
