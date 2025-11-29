@@ -1,5 +1,6 @@
 import base64
 import datetime
+import html
 import io
 import os
 import uuid
@@ -846,11 +847,14 @@ def render_history() -> None:
                 entry["id"] = image_id
             render_clickable_image(image_bytes, image_id)
         prompt_display = prompt_text.strip()
-        st.markdown("**Prompt**")
-        if prompt_display:
-            st.text(prompt_display)
-        else:
-            st.text("(未入力)")
+        prompt_block = (
+            f'<div style="margin-top:15px; font-weight:600;">Prompt</div>'
+            f'<div style="white-space:pre-wrap; background:rgba(0,0,0,0.02); '
+            f'padding:10px; border-radius:8px; margin-top:6px;">'
+            f'{html.escape(prompt_display) if prompt_display else "(未入力)"}'
+            f"</div>"
+        )
+        st.markdown(prompt_block, unsafe_allow_html=True)
         meta_bits: List[str] = []
         aspect_ratio = entry.get("aspect_ratio")
         if aspect_ratio:
@@ -865,11 +869,22 @@ def render_history() -> None:
         if meta_bits:
             st.caption(" / ".join(meta_bits))
 
-        col1, col2 = st.columns(2)
+        download_filename = (
+            f"{sanitize_filename_component(prompt_display or 'prompt')}_{image_id}.png"
+        )
+        col1, col2, col3 = st.columns(3)
         if col1.button("Upscale x2", key=f"upscale_x2_{image_id}"):
             handle_upscale(entry, "x2")
         if col2.button("Upscale x4", key=f"upscale_x4_{image_id}"):
             handle_upscale(entry, "x4")
+        with col3:
+            st.download_button(
+                "Download",
+                data=image_bytes or b"",
+                file_name=download_filename,
+                mime="image/png",
+                key=f"download_{image_id}",
+            )
         st.divider()
 
 
