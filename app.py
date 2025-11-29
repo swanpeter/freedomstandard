@@ -21,9 +21,6 @@ try:
     from google.api_core import exceptions as google_exceptions
     from google.genai import types
     from google.cloud import storage
-    import vertexai
-    from google.oauth2 import service_account
-    from vertexai.vision_models import ImageGenerationModel, Image as VertexImage
 except ImportError:
     st.error(
         "必要なライブラリが不足しています。`pip install -r requirements.txt` を実行してください。"
@@ -64,7 +61,6 @@ TITLE = "Gemini 画像生成"
 MODEL_NAME = "models/gemini-3-pro-image-preview"
 IMAGE_ASPECT_RATIO = "16:9"
 IMAGE_ASPECT_RATIO_OPTIONS = ("16:9", "9:16", "1:1")
-IMAGEN_MODEL_NAME = "imagegeneration@002"
 DEFAULT_PROMPT_SUFFIX = (
     "((masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus))"
 )
@@ -395,90 +391,6 @@ def _get_from_container(container: object, key: str) -> Optional[Any]:
         return None
 
 
-def _parse_service_account_info(raw: object) -> Optional[Dict[str, Any]]:
-    if isinstance(raw, dict):
-        return dict(raw)
-    if isinstance(raw, (str, bytes)):
-        raw_json = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-        raw_json = raw_json.strip()
-        if not raw_json:
-            return None
-        try:
-            return json.loads(raw_json)
-        except json.JSONDecodeError:
-            try:
-                return json.loads(raw_json, strict=False)
-            except json.JSONDecodeError:
-                return None
-    return None
-
-
-def load_vertex_ai_settings() -> Tuple[Optional[str], Optional[str], Optional[object]]:
-    try:
-        secrets_obj = st.secrets
-    except StreamlitSecretNotFoundError:
-        secrets_obj = None
-    except Exception:
-        secrets_obj = None
-
-    gcp_section = None
-    if isinstance(secrets_obj, dict):
-        gcp_section = secrets_obj.get("gcp")
-    else:
-        gcp_section = _get_from_container(secrets_obj, "gcp")
-
-    project_id = _get_from_container(gcp_section, "project_id") if gcp_section else None
-    region = _get_from_container(gcp_section, "region") if gcp_section else None
-    service_account_json = _get_from_container(gcp_section, "service_account_json") if gcp_section else None
-
-    project_id = (
-        _normalize_credential(str(project_id)) if project_id is not None else None
-    ) or _normalize_credential(os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT") or os.getenv("PROJECT_ID"))
-    region = _normalize_credential(str(region)) if region is not None else _normalize_credential(
-        os.getenv("VERTEX_REGION") or os.getenv("GCP_REGION") or os.getenv("REGION")
-    )
-
-    credentials_obj = None
-    service_account_info = _parse_service_account_info(service_account_json)
-    if service_account_info:
-        try:
-            credentials_obj = service_account.Credentials.from_service_account_info(service_account_info)
-        except Exception:
-            credentials_obj = None
-
-    return project_id, region, credentials_obj
-
-
-def upscale_image_with_imagen(
-    img_bytes: bytes,
-    project_id: str,
-    region: str,
-    upscale_factor: str = "x2",
-    credentials: Optional[object] = None,
-) -> bytes:
-    if not img_bytes:
-        raise ValueError("img_bytes が空です。アップスケールできません。")
-
-    if upscale_factor not in ("x2", "x4"):
-        raise ValueError("upscale_factor は 'x2' または 'x4' を指定してください。")
-
-    if not project_id or not region:
-        raise ValueError("project_id または region が指定されていません。")
-
-    if credentials is None:
-        raise RuntimeError(
-            "Vertex AI 用の認証情報が見つかりませんでした。\n"
-            "st.secrets['gcp']['service_account_json'] か "
-            "環境変数 GOOGLE_APPLICATION_CREDENTIALS を設定してください。"
-        )
-
-    vertexai.init(project=project_id, location=region, credentials=credentials)
-    model = ImageGenerationModel.from_pretrained(IMAGEN_MODEL_NAME)
-    vertex_img = VertexImage(image_bytes=img_bytes)
-    upscaled_image = model.upscale_image(image=vertex_img, upscale_factor=upscale_factor)
-    return upscaled_image._image_bytes
-
-
 def sanitize_filename_component(value: str, max_length: int = 80) -> str:
     text = value or ""
     sanitized_chars: List[str] = []
@@ -791,55 +703,6 @@ def render_clickable_image(image_bytes: bytes, element_id: str) -> None:
     )
 
 
-def handle_upscale(entry: Dict[str, object], upscale_factor: str) -> None:
-    image_bytes = entry.get("image_bytes")
-    if not image_bytes:
-        st.error("画像データが見つかりません。")
-        return
-
-    project_id, region, credentials_obj = load_vertex_ai_settings()
-    st.write("VertexAI settings:", project_id, region, bool(credentials_obj))
-    if not project_id or not region:
-        st.warning("Vertex AI の設定（project_id, region）が不足しています。")
-        return
-
-    with st.spinner(f"アップスケール中... ({upscale_factor})"):
-        try:
-            upscaled_bytes = upscale_image_with_imagen(
-                image_bytes,
-                project_id=project_id,
-                region=region,
-                upscale_factor=upscale_factor,
-                credentials=credentials_obj,
-            )
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"アップスケールに失敗しました: {exc}")
-            return
-
-    if not upscaled_bytes:
-        st.error("アップスケール結果を取得できませんでした。")
-        return
-
-    upload_image_to_gcs(
-        upscaled_bytes,
-        object_name=build_prompt_based_filename(entry.get("prompt", "")),
-    )
-
-    st.session_state.history.insert(
-        0,
-        {
-            "id": f"img_{uuid.uuid4().hex}",
-            "image_bytes": upscaled_bytes,
-            "prompt": entry.get("prompt", ""),
-            "model": IMAGEN_MODEL_NAME,
-            "upscale_factor": upscale_factor,
-            "aspect_ratio": entry.get("aspect_ratio"),
-            "source_image_id": entry.get("id"),
-        },
-    )
-    st.success(f"アップスケール完了 ({upscale_factor})")
-
-
 def render_history() -> None:
     if not st.session_state.history:
         return
@@ -868,8 +731,9 @@ def render_history() -> None:
         aspect_ratio = entry.get("aspect_ratio")
         if aspect_ratio:
             meta_bits.append(f"Aspect: {aspect_ratio}")
-        if entry.get("upscale_factor"):
-            meta_bits.append(f"Upscaled: {entry['upscale_factor']}")
+        resolution = entry.get("resolution")
+        if resolution:
+            meta_bits.append(f"Resolution: {resolution}")
         model_name = entry.get("model")
         if model_name:
             meta_bits.append(f"Model: {model_name}")
@@ -881,19 +745,13 @@ def render_history() -> None:
         download_filename = (
             f"{sanitize_filename_component(prompt_display or 'prompt')}_{image_id}.png"
         )
-        col1, col2, col3 = st.columns(3)
-        if col1.button("Upscale x2", key=f"upscale_x2_{image_id}"):
-            handle_upscale(entry, "x2")
-        if col2.button("Upscale x4", key=f"upscale_x4_{image_id}"):
-            handle_upscale(entry, "x4")
-        with col3:
-            st.download_button(
-                "Download",
-                data=image_bytes or b"",
-                file_name=download_filename,
-                mime="image/png",
-                key=f"download_{image_id}",
-            )
+        st.download_button(
+            "Download",
+            data=image_bytes or b"",
+            file_name=download_filename,
+            mime="image/png",
+            key=f"download_{image_id}",
+        )
         st.divider()
 
 
@@ -915,9 +773,9 @@ def main() -> None:
         index=IMAGE_ASPECT_RATIO_OPTIONS.index(IMAGE_ASPECT_RATIO),
         horizontal=True,
     )
-    upscale_choice = st.radio(
-        "アップスケール",
-        ("なし", "x2", "x4"),
+    resolution = st.radio(
+        "解像度",
+        ("1K", "2K", "4K"),
         index=0,
         horizontal=True,
     )
@@ -952,8 +810,11 @@ def main() -> None:
                     model=MODEL_NAME,
                     contents=contents_for_request,
                     config=types.GenerateContentConfig(
-                        response_modalities=["TEXT", "IMAGE"],
-                        image_config=types.ImageConfig(aspect_ratio=aspect_ratio),
+                        response_modalities=["IMAGE"],
+                        image_config=types.ImageConfig(
+                            aspect_ratio=aspect_ratio,
+                            image_size=resolution,
+                        ),
                     ),
                 )
             except google_exceptions.ResourceExhausted:
@@ -988,11 +849,10 @@ def main() -> None:
                 "model": MODEL_NAME,
                 "no_text": True,
                 "aspect_ratio": aspect_ratio,
+                "resolution": resolution,
                 "reference_used": bool(ref_bytes),
             },
         )
-        if upscale_choice in {"x2", "x4"}:
-            handle_upscale(st.session_state.history[0], upscale_choice)
         st.success("生成完了")
 
     render_history()
