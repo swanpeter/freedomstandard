@@ -21,6 +21,7 @@ try:
     from google.api_core import exceptions as google_exceptions
     from google.genai import types
     from google.cloud import storage
+    from google.oauth2 import service_account
 except ImportError:
     st.error(
         "必要なライブラリが不足しています。`pip install -r requirements.txt` を実行してください。"
@@ -773,7 +774,7 @@ def main() -> None:
         index=IMAGE_ASPECT_RATIO_OPTIONS.index(IMAGE_ASPECT_RATIO),
         horizontal=True,
     )
-    resolution = st.radio(
+    resolution_label = st.radio(
         "解像度",
         ("1K", "2K", "4K"),
         index=0,
@@ -813,8 +814,12 @@ def main() -> None:
                         response_modalities=["IMAGE"],
                         image_config=types.ImageConfig(
                             aspect_ratio=aspect_ratio,
-                            image_size=resolution,
                         ),
+                        media_resolution={
+                            "1K": types.MediaResolution.MEDIA_RESOLUTION_LOW,
+                            "2K": types.MediaResolution.MEDIA_RESOLUTION_MEDIUM,
+                            "4K": types.MediaResolution.MEDIA_RESOLUTION_HIGH,
+                        }.get(resolution_label, types.MediaResolution.MEDIA_RESOLUTION_LOW),
                     ),
                 )
             except google_exceptions.ResourceExhausted:
@@ -849,7 +854,7 @@ def main() -> None:
                 "model": MODEL_NAME,
                 "no_text": True,
                 "aspect_ratio": aspect_ratio,
-                "resolution": resolution,
+                "resolution": resolution_label,
                 "reference_used": bool(ref_bytes),
             },
         )
