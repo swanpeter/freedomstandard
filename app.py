@@ -846,6 +846,7 @@ def render_history() -> None:
                 image_id = f"img_{uuid.uuid4().hex}"
                 entry["id"] = image_id
             render_clickable_image(image_bytes, image_id)
+            st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
         prompt_display = prompt_text.strip()
         prompt_block = (
             f'<div style="margin-top:15px; font-weight:600;">Prompt</div>'
