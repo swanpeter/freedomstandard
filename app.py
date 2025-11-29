@@ -805,27 +805,42 @@ def main() -> None:
         else:
             contents_for_request = prompt_for_request
 
+        image_config_kwargs: Dict[str, object] = {"aspect_ratio": aspect_ratio}
+        image_size_key = None
+        if hasattr(types.ImageConfig, "model_fields"):
+            if "image_size" in getattr(types.ImageConfig, "model_fields", {}):
+                image_size_key = "image_size"
+        elif hasattr(types.ImageConfig, "__fields__"):
+            if "image_size" in getattr(types.ImageConfig, "__fields__", {}):
+                image_size_key = "image_size"
+        if image_size_key:
+            image_config_kwargs[image_size_key] = resolution_label
+
+        def run_generation(include_size: bool) -> object:
+            cfg_kwargs = dict(image_config_kwargs)
+            if not include_size and image_size_key:
+                cfg_kwargs.pop(image_size_key, None)
+            return client.models.generate_content(
+                model=MODEL_NAME,
+                contents=contents_for_request,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=types.ImageConfig(**cfg_kwargs),
+                ),
+            )
+
         with st.spinner("画像を生成しています..."):
             try:
-                image_config_kwargs: Dict[str, object] = {"aspect_ratio": aspect_ratio}
-                image_size_key = None
-                if hasattr(types.ImageConfig, "model_fields"):
-                    if "image_size" in getattr(types.ImageConfig, "model_fields", {}):
-                        image_size_key = "image_size"
-                elif hasattr(types.ImageConfig, "__fields__"):
-                    if "image_size" in getattr(types.ImageConfig, "__fields__", {}):
-                        image_size_key = "image_size"
-                if image_size_key:
-                    image_config_kwargs[image_size_key] = resolution_label
-
-                response = client.models.generate_content(
-                    model=MODEL_NAME,
-                    contents=contents_for_request,
-                    config=types.GenerateContentConfig(
-                        response_modalities=["IMAGE"],
-                        image_config=types.ImageConfig(**image_config_kwargs),
-                    ),
-                )
+                response = run_generation(include_size=True)
+            except google_exceptions.InvalidArgument as exc:
+                if "Media resolution is not enabled for this model" in str(exc) and image_size_key:
+                    st.info("このモデルでは解像度指定が無効でした。デフォルト解像度で再試行します。")
+                    try:
+                        response = run_generation(include_size=False)
+                    except Exception:
+                        raise exc
+                else:
+                    raise
             except google_exceptions.ResourceExhausted:
                 st.error(
                     "Gemini API のクォータ（無料枠または請求プラン）を超えました。"
