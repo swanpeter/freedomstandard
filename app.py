@@ -807,19 +807,23 @@ def main() -> None:
 
         with st.spinner("画像を生成しています..."):
             try:
+                image_config_kwargs: Dict[str, object] = {"aspect_ratio": aspect_ratio}
+                image_size_key = None
+                if hasattr(types.ImageConfig, "model_fields"):
+                    if "image_size" in getattr(types.ImageConfig, "model_fields", {}):
+                        image_size_key = "image_size"
+                elif hasattr(types.ImageConfig, "__fields__"):
+                    if "image_size" in getattr(types.ImageConfig, "__fields__", {}):
+                        image_size_key = "image_size"
+                if image_size_key:
+                    image_config_kwargs[image_size_key] = resolution_label
+
                 response = client.models.generate_content(
                     model=MODEL_NAME,
                     contents=contents_for_request,
                     config=types.GenerateContentConfig(
                         response_modalities=["IMAGE"],
-                        image_config=types.ImageConfig(
-                            aspect_ratio=aspect_ratio,
-                        ),
-                        media_resolution={
-                            "1K": types.MediaResolution.MEDIA_RESOLUTION_LOW,
-                            "2K": types.MediaResolution.MEDIA_RESOLUTION_MEDIUM,
-                            "4K": types.MediaResolution.MEDIA_RESOLUTION_HIGH,
-                        }.get(resolution_label, types.MediaResolution.MEDIA_RESOLUTION_LOW),
+                        image_config=types.ImageConfig(**image_config_kwargs),
                     ),
                 )
             except google_exceptions.ResourceExhausted:
