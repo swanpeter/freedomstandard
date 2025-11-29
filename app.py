@@ -465,6 +465,13 @@ def upscale_image_with_imagen(
     if not project_id or not region:
         raise ValueError("project_id または region が指定されていません。")
 
+    if credentials is None:
+        raise RuntimeError(
+            "Vertex AI 用の認証情報が見つかりませんでした。\n"
+            "st.secrets['gcp']['service_account_json'] か "
+            "環境変数 GOOGLE_APPLICATION_CREDENTIALS を設定してください。"
+        )
+
     vertexai.init(project=project_id, location=region, credentials=credentials)
     model = ImageGenerationModel.from_pretrained(IMAGEN_MODEL_NAME)
     vertex_img = VertexImage(image_bytes=img_bytes)
@@ -791,6 +798,7 @@ def handle_upscale(entry: Dict[str, object], upscale_factor: str) -> None:
         return
 
     project_id, region, credentials_obj = load_vertex_ai_settings()
+    st.write("VertexAI settings:", project_id, region, bool(credentials_obj))
     if not project_id or not region:
         st.warning("Vertex AI の設定（project_id, region）が不足しています。")
         return
