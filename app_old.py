@@ -21,7 +21,7 @@ try:
     from google.api_core import exceptions as google_exceptions
     from google.genai import types
     from google.cloud import storage
-    import vertexai
+    from google.cloud import aiplatform
     from google.oauth2 import service_account
     from vertexai.vision_models import ImageGenerationModel, Image as VertexImage
 except ImportError:
@@ -465,7 +465,7 @@ def upscale_image_with_imagen(
     if not project_id or not region:
         raise ValueError("project_id または region が指定されていません。")
 
-    vertexai.init(project=project_id, location=region, credentials=credentials)
+    aiplatform.init(project=project_id, location=region, credentials=credentials)
     model = ImageGenerationModel.from_pretrained(IMAGEN_MODEL_NAME)
     vertex_img = VertexImage(image_bytes=img_bytes)
     upscaled_image = model.upscale_image(image=vertex_img, upscale_factor=upscale_factor)
