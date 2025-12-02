@@ -242,6 +242,23 @@ def _load_uploaded_file(upload) -> Tuple[Optional[bytes], Optional[str]]:
     return data if data else None, mime_type
 
 
+def _load_uploaded_files(uploads: Optional[object]) -> List[Tuple[bytes, Optional[str]]]:
+    if uploads is None:
+        return []
+
+    if isinstance(uploads, Sequence) and not isinstance(uploads, (bytes, bytearray, memoryview, str)):
+        candidates = list(uploads)
+    else:
+        candidates = [uploads]
+
+    files: List[Tuple[bytes, Optional[str]]] = []
+    for upload in candidates:
+        data, mime = _load_uploaded_file(upload)
+        if data:
+            files.append((data, mime))
+    return files
+
+
 def extract_parts(candidate: object) -> Sequence:
     content = getattr(candidate, "content", None)
     parts = getattr(content, "parts", None) if content is not None else None
@@ -766,8 +783,12 @@ def main() -> None:
     api_key = load_configured_api_key()
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
-    uploaded_ref = st.file_uploader("Reference image (任意)", type=["png", "jpg", "jpeg", "webp"])
-    ref_bytes, ref_mime = _load_uploaded_file(uploaded_ref)
+    uploaded_refs = st.file_uploader(
+        "Reference images (任意・複数可)",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+    )
+    ref_files = _load_uploaded_files(uploaded_refs)
     aspect_ratio = st.radio(
         "アスペクト比",
         IMAGE_ASPECT_RATIO_OPTIONS,
@@ -797,11 +818,14 @@ def main() -> None:
         prompt_for_request = "\n".join(prompt_components)
 
         contents_for_request: object
-        if ref_bytes:
+        if ref_files:
             # Use explicit constructors for compatibility across SDK versions.
-            img_part = types.Part(inline_data=types.Blob(data=ref_bytes, mime_type=ref_mime or "image/png"))
+            image_parts = [
+                types.Part(inline_data=types.Blob(data=img_bytes, mime_type=mime or "image/png"))
+                for img_bytes, mime in ref_files
+            ]
             text_part = types.Part(text=prompt_for_request)
-            contents_for_request = [types.Content(role="user", parts=[img_part, text_part])]
+            contents_for_request = [types.Content(role="user", parts=[*image_parts, text_part])]
         else:
             contents_for_request = prompt_for_request
 
@@ -874,7 +898,7 @@ def main() -> None:
                 "no_text": True,
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution_label,
-                "reference_used": bool(ref_bytes),
+                "reference_used": bool(ref_files),
             },
         )
         st.success("生成完了")
