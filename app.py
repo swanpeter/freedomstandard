@@ -4,12 +4,14 @@ import html
 import io
 import os
 import uuid
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import json
 
 import streamlit as st
 import streamlit.components.v1 as components
+from PIL import Image
 
 try:
     from streamlit.runtime.secrets import StreamlitSecretNotFoundError
@@ -218,6 +220,20 @@ def decode_image_data(data: Optional[object]) -> Optional[bytes]:
         except (ValueError, TypeError):
             return None
     return None
+
+
+def extract_aspect_ratio(image_bytes: Optional[bytes]) -> Optional[str]:
+    if not image_bytes:
+        return None
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            width, height = img.size
+    except Exception:
+        return None
+    if not width or not height:
+        return None
+    divisor = math.gcd(width, height) or 1
+    return f"{width // divisor}:{height // divisor}"
 
 
 def _load_uploaded_file(upload) -> Tuple[Optional[bytes], Optional[str]]:
@@ -782,6 +798,9 @@ def main() -> None:
 
     api_key = load_configured_api_key()
 
+    if "aspect_ratio" not in st.session_state:
+        st.session_state["aspect_ratio"] = IMAGE_ASPECT_RATIO
+
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
     uploaded_refs = st.file_uploader(
         "Reference images (任意・複数可)",
@@ -789,12 +808,28 @@ def main() -> None:
         accept_multiple_files=True,
     )
     ref_files = _load_uploaded_files(uploaded_refs)
+    first_ref_aspect_ratio = extract_aspect_ratio(ref_files[0][0]) if ref_files else None
+    adopt_label = "参照1枚目のアスペクト比を適用"
+    if st.button(adopt_label, disabled=not ref_files, help="アップロードした1枚目の比率を反映します"):
+        if first_ref_aspect_ratio:
+            st.session_state["aspect_ratio"] = first_ref_aspect_ratio
+            st.toast(f"アスペクト比を {first_ref_aspect_ratio} に設定しました")
+        else:
+            st.warning("参照画像のアスペクト比を読み取れませんでした。")
+
+    aspect_ratio_options = list(IMAGE_ASPECT_RATIO_OPTIONS)
+    current_aspect_ratio = st.session_state["aspect_ratio"]
+    if first_ref_aspect_ratio and first_ref_aspect_ratio not in aspect_ratio_options:
+        aspect_ratio_options.append(first_ref_aspect_ratio)
+    if current_aspect_ratio not in aspect_ratio_options:
+        aspect_ratio_options.append(current_aspect_ratio)
     aspect_ratio = st.radio(
         "アスペクト比",
-        IMAGE_ASPECT_RATIO_OPTIONS,
-        index=IMAGE_ASPECT_RATIO_OPTIONS.index(IMAGE_ASPECT_RATIO),
+        aspect_ratio_options,
+        index=aspect_ratio_options.index(current_aspect_ratio),
         horizontal=True,
     )
+    st.session_state["aspect_ratio"] = aspect_ratio
     resolution_label = st.radio(
         "解像度",
         ("1K", "2K", "4K"),
