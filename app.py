@@ -62,8 +62,20 @@ def rerun_app() -> None:
 
 TITLE = "Gemini 画像生成"
 MODEL_NAME = "models/gemini-3-pro-image-preview"
-IMAGE_ASPECT_RATIO = "16:9"
-IMAGE_ASPECT_RATIO_OPTIONS = ("16:9", "9:16", "1:1")
+IMAGE_ASPECT_RATIO_DEFAULT = "16:9"
+IMAGE_ASPECT_RATIO_ALLOWED = (
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+)
+ASPECT_RATIO_NONE_LABEL = "指定なし（モデルに任せる）"
 DEFAULT_PROMPT_SUFFIX = (
     "((masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus))"
 )
@@ -799,7 +811,7 @@ def main() -> None:
     api_key = load_configured_api_key()
 
     if "aspect_ratio" not in st.session_state:
-        st.session_state["aspect_ratio"] = IMAGE_ASPECT_RATIO
+        st.session_state["aspect_ratio"] = IMAGE_ASPECT_RATIO_DEFAULT
 
     prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
     uploaded_refs = st.file_uploader(
@@ -811,16 +823,18 @@ def main() -> None:
     first_ref_aspect_ratio = extract_aspect_ratio(ref_files[0][0]) if ref_files else None
     adopt_label = "参照1枚目のアスペクト比を適用"
     if st.button(adopt_label, disabled=not ref_files, help="アップロードした1枚目の比率を反映します"):
-        if first_ref_aspect_ratio:
+        if first_ref_aspect_ratio and first_ref_aspect_ratio in IMAGE_ASPECT_RATIO_ALLOWED:
             st.session_state["aspect_ratio"] = first_ref_aspect_ratio
             st.toast(f"アスペクト比を {first_ref_aspect_ratio} に設定しました")
+        elif first_ref_aspect_ratio:
+            st.warning(
+                f"読み取った比率 {first_ref_aspect_ratio} はサポート外でした。近い値を手動で選択してください。"
+            )
         else:
             st.warning("参照画像のアスペクト比を読み取れませんでした。")
 
-    aspect_ratio_options = list(IMAGE_ASPECT_RATIO_OPTIONS)
+    aspect_ratio_options = [ASPECT_RATIO_NONE_LABEL, *IMAGE_ASPECT_RATIO_ALLOWED]
     current_aspect_ratio = st.session_state["aspect_ratio"]
-    if first_ref_aspect_ratio and first_ref_aspect_ratio not in aspect_ratio_options:
-        aspect_ratio_options.append(first_ref_aspect_ratio)
     if current_aspect_ratio not in aspect_ratio_options:
         aspect_ratio_options.append(current_aspect_ratio)
     aspect_ratio = st.radio(
@@ -864,21 +878,23 @@ def main() -> None:
         else:
             contents_for_request = prompt_for_request
 
-        image_config_kwargs: Dict[str, object] = {"aspect_ratio": aspect_ratio}
-        image_size_key = None
-        if hasattr(types.ImageConfig, "model_fields"):
-            if "image_size" in getattr(types.ImageConfig, "model_fields", {}):
-                image_size_key = "image_size"
-        elif hasattr(types.ImageConfig, "__fields__"):
-            if "image_size" in getattr(types.ImageConfig, "__fields__", {}):
-                image_size_key = "image_size"
-        if image_size_key:
-            image_config_kwargs[image_size_key] = resolution_label
+    image_config_kwargs: Dict[str, object] = {}
+    if aspect_ratio != ASPECT_RATIO_NONE_LABEL:
+        image_config_kwargs["aspect_ratio"] = aspect_ratio
+    image_size_key = None
+    if hasattr(types.ImageConfig, "model_fields"):
+        if "image_size" in getattr(types.ImageConfig, "model_fields", {}):
+            image_size_key = "image_size"
+    elif hasattr(types.ImageConfig, "__fields__"):
+        if "image_size" in getattr(types.ImageConfig, "__fields__", {}):
+            image_size_key = "image_size"
+    if image_size_key:
+        image_config_kwargs[image_size_key] = resolution_label
 
-        def run_generation(include_size: bool) -> object:
-            cfg_kwargs = dict(image_config_kwargs)
-            if not include_size and image_size_key:
-                cfg_kwargs.pop(image_size_key, None)
+    def run_generation(include_size: bool) -> object:
+        cfg_kwargs = dict(image_config_kwargs)
+        if not include_size and image_size_key:
+            cfg_kwargs.pop(image_size_key, None)
             return client.models.generate_content(
                 model=MODEL_NAME,
                 contents=contents_for_request,
