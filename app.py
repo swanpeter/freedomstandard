@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import json
+from PIL import Image
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -376,6 +377,24 @@ def collect_image_bytes(response: object) -> Optional[bytes]:
     return None
 
 
+def detect_image_format(image_bytes: Optional[bytes]) -> Tuple[str, str]:
+    default = ("png", "image/png")
+    if not image_bytes:
+        return default
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            fmt = (img.format or "").upper()
+    except Exception:
+        return default
+    mapping = {
+        "PNG": ("png", "image/png"),
+        "JPEG": ("jpg", "image/jpeg"),
+        "JPG": ("jpg", "image/jpeg"),
+        "WEBP": ("webp", "image/webp"),
+    }
+    return mapping.get(fmt, default)
+
+
 def collect_text_parts(response: object) -> List[str]:
     texts: List[str] = []
     candidates = getattr(response, "candidates", None) or []
@@ -432,17 +451,22 @@ def sanitize_filename_component(value: str, max_length: int = 80) -> str:
     return sanitized
 
 
-def build_prompt_based_filename(prompt_text: str) -> str:
+def build_prompt_based_filename(prompt_text: str, extension: str = "png") -> str:
     prompt_component = sanitize_filename_component(prompt_text or "prompt", max_length=80)
     unique_suffix = uuid.uuid4().hex
-    return f"user06_{prompt_component}_{unique_suffix}.png"
+    cleaned_ext = extension.lower().lstrip(".") or "png"
+    return f"user06_{prompt_component}_{unique_suffix}.{cleaned_ext}"
 
 
 def upload_image_to_gcs(
     image_bytes: bytes,
     filename_prefix: str = "gemini_image",
     object_name: Optional[str] = None,
+    mime_type: str = "image/png",
+    extension: str = "png",
 ) -> Tuple[Optional[str], Optional[str]]:
+    normalized_ext = (extension or "").lower().lstrip(".") or "png"
+    normalized_mime = mime_type or "image/png"
     if not is_gcs_upload_enabled():
         st.info("GCS へのアップロードは無効化されています。")
         return None, None
@@ -506,15 +530,15 @@ def upload_image_to_gcs(
         bucket = storage_client.bucket(str(bucket_name))
         if object_name:
             cleaned_object_name = object_name.strip()
-            if not cleaned_object_name.lower().endswith(".png"):
-                cleaned_object_name = f"{cleaned_object_name}.png"
+            if not cleaned_object_name.lower().endswith(f".{normalized_ext}"):
+                cleaned_object_name = f"{cleaned_object_name}.{normalized_ext}"
             cleaned_object_name = cleaned_object_name.replace("/", "_").replace("\\", "_")
             filename = f"images/{cleaned_object_name}"
         else:
             timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            filename = f"images/{filename_prefix}_{timestamp}_{uuid.uuid4().hex}.png"
+            filename = f"images/{filename_prefix}_{timestamp}_{uuid.uuid4().hex}.{normalized_ext}"
         blob = bucket.blob(filename)
-        blob.upload_from_file(io.BytesIO(image_bytes), content_type="image/png")
+        blob.upload_from_file(io.BytesIO(image_bytes), content_type=normalized_mime)
 
         gcs_path = f"gs://{bucket.name}/{filename}"
         signed_url = blob.generate_signed_url(
@@ -649,10 +673,10 @@ def ensure_lightbox_assets() -> None:
     )
 
 
-def render_clickable_image(image_bytes: bytes, element_id: str) -> None:
+def render_clickable_image(image_bytes: bytes, element_id: str, mime_type: str = "image/png") -> None:
     ensure_lightbox_assets()
     encoded = base64.b64encode(image_bytes).decode("utf-8")
-    image_src = f"data:image/png;base64,{encoded}"
+    image_src = f"data:{mime_type};base64,{encoded}"
     image_src_json = json.dumps(image_src)
     components.html(
         f"""<!DOCTYPE html>
@@ -729,12 +753,14 @@ def render_history() -> None:
     for entry in st.session_state.history:
         image_bytes = entry.get("image_bytes")
         prompt_text = entry.get("prompt") or ""
+        mime_type = entry.get("mime_type") or "image/png"
+        extension = (entry.get("extension") or "png").lstrip(".") or "png"
         if image_bytes:
             image_id = entry.get("id")
             if not isinstance(image_id, str):
                 image_id = f"img_{uuid.uuid4().hex}"
                 entry["id"] = image_id
-            render_clickable_image(image_bytes, image_id)
+            render_clickable_image(image_bytes, image_id, mime_type=mime_type)
             st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
         prompt_display = prompt_text.strip()
         prompt_block = (
@@ -761,13 +787,13 @@ def render_history() -> None:
             st.caption(" / ".join(meta_bits))
 
         download_filename = (
-            f"{sanitize_filename_component(prompt_display or 'prompt')}_{image_id}.png"
+            f"{sanitize_filename_component(prompt_display or 'prompt')}_{image_id}.{extension}"
         )
         st.download_button(
             "Download",
             data=image_bytes or b"",
             file_name=download_filename,
-            mime="image/png",
+            mime=mime_type,
             key=f"download_{image_id}",
         )
         st.divider()
@@ -884,9 +910,15 @@ def main() -> None:
             st.error("画像データを取得できませんでした。")
             st.stop()
 
+        image_extension, image_mime_type = detect_image_format(image_bytes)
         user_prompt = prompt.strip()
-        object_name = build_prompt_based_filename(user_prompt)
-        upload_image_to_gcs(image_bytes, object_name=object_name)
+        object_name = build_prompt_based_filename(user_prompt, extension=image_extension)
+        upload_image_to_gcs(
+            image_bytes,
+            object_name=object_name,
+            mime_type=image_mime_type,
+            extension=image_extension,
+        )
 
         st.session_state.history.insert(
             0,
@@ -899,6 +931,8 @@ def main() -> None:
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution_label,
                 "reference_used": bool(ref_files),
+                "mime_type": image_mime_type,
+                "extension": image_extension,
             },
         )
         st.success("生成完了")
