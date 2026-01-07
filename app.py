@@ -807,7 +807,7 @@ def main() -> None:
 
     api_key = load_configured_api_key()
 
-    prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してください")
+    prompt = st.text_area("Prompt", height=150, placeholder="描いてほしい内容を入力してくださいPromptme")
     uploaded_refs = st.file_uploader(
         "Reference images (任意・複数可)",
         type=["png", "jpg", "jpeg", "webp"],
@@ -831,7 +831,7 @@ def main() -> None:
             st.warning("Gemini API key が設定されていません。Streamlit secrets などで設定してください。")
             st.stop()
         if not prompt.strip():
-            st.warning("プロンプトを入力してくださいよ！！。")
+            st.warning("プロンプトを入力してください。")
             st.stop()
 
         client = genai.Client(api_key=api_key.strip())
