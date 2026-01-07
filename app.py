@@ -67,8 +67,7 @@ DEFAULT_PROMPT_SUFFIX = (
     "((masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus))"
 )
 NO_TEXT_TOGGLE_SUFFIX = (
-    "((no background text, no symbols, no markings, no letters anywhere, no typography, "
-    "no signboard, no watermark, no logo, no text, no subtitles, no labels, no poster elements, neutral background))"
+    ""
 )
 
 DEFAULT_GEMINI_API_KEY = (
@@ -832,7 +831,7 @@ def main() -> None:
             st.warning("Gemini API key が設定されていません。Streamlit secrets などで設定してください。")
             st.stop()
         if not prompt.strip():
-            st.warning("プロンプトを入力してください。")
+            st.warning("プロンプトを入力してくださいよ！！。")
             st.stop()
 
         client = genai.Client(api_key=api_key.strip())
