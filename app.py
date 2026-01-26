@@ -575,14 +575,31 @@ def get_vertex_ai_settings() -> Tuple[Optional[str], Optional[str], Optional[ser
         secrets_obj = None
 
     vertex_section = None
+    gcp_section = None
     if isinstance(secrets_obj, dict):
         vertex_section = secrets_obj.get("vertex_ai")
+        gcp_section = secrets_obj.get("gcp")
     elif secrets_obj is not None:
         vertex_section = _get_from_container(secrets_obj, "vertex_ai")
+        gcp_section = _get_from_container(secrets_obj, "gcp")
 
     service_account_json = None
     if vertex_section:
         service_account_json = _get_from_container(vertex_section, "service_account_json")
+        if not project_id:
+            project_id = _normalize_credential(_get_from_container(vertex_section, "project_id") or "")
+        if not location:
+            location = _normalize_credential(
+                _get_from_container(vertex_section, "location") or _get_from_container(vertex_section, "region") or ""
+            )
+    if not service_account_json and gcp_section:
+        service_account_json = _get_from_container(gcp_section, "service_account_json")
+        if not project_id:
+            project_id = _normalize_credential(_get_from_container(gcp_section, "project_id") or "")
+        if not location:
+            location = _normalize_credential(
+                _get_from_container(gcp_section, "location") or _get_from_container(gcp_section, "region") or ""
+            )
     if service_account_json is None:
         service_account_json = get_secret_value("VERTEX_SERVICE_ACCOUNT_JSON") or os.getenv("VERTEX_SERVICE_ACCOUNT_JSON")
 
