@@ -66,6 +66,7 @@ def rerun_app() -> None:
 
 TITLE = "Gemini 画像生成"
 MODEL_NAME = "models/gemini-3-pro-image-preview"
+IMAGEN_UPSCALE_MODEL = "imagen-4.0-upscale-preview"
 IMAGE_ASPECT_RATIO = "16:9"
 IMAGE_ASPECT_RATIO_OPTIONS = ("16:9", "9:16", "1:1")
 DEFAULT_PROMPT_SUFFIX = (
@@ -691,30 +692,29 @@ def upscale_image_with_vertex(
     api_key = get_vertex_ai_api_key()
     project_id, location, credentials = get_vertex_ai_settings()
     if api_key:
-        endpoint = None
-        if project_id and location:
-            endpoint = (
-                f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}"
-                f"/locations/{location}/publishers/google/models/imagegeneration@002:predict"
-            )
-        else:
-            endpoint = "https://aiplatform.googleapis.com/v1/publishers/google/models/imagegeneration@002:predict"
+        if not project_id or not location:
+            st.warning("VERTEX_PROJECT_ID と VERTEX_LOCATION が必要です。")
+            return None
+        endpoint = (
+            f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}"
+            f"/locations/{location}/publishers/google/models/{IMAGEN_UPSCALE_MODEL}:predict"
+        )
 
         payload = {
             "instances": [
                 {
-                    "prompt": "",
+                    "prompt": "Upscale the image",
                     "image": {
                         "bytesBase64Encoded": base64.b64encode(image_bytes).decode("utf-8")
                     },
                 }
             ],
             "parameters": {
-                "sampleCount": 1,
                 "mode": "upscale",
-                "upscaleConfig": {
-                    "upscaleFactor": upscale_factor,
+                "outputOptions": {
+                    "mimeType": "image/png",
                 },
+                "upscaleConfig": {"upscaleFactor": upscale_factor},
             },
         }
         response = requests.post(
@@ -738,7 +738,7 @@ def upscale_image_with_vertex(
         return None
 
     vertexai.init(project=project_id, location=location, credentials=credentials)
-    model = ImageGenerationModel.from_pretrained("imagegeneration@002")
+    model = ImageGenerationModel.from_pretrained(IMAGEN_UPSCALE_MODEL)
 
     source_image = _vertex_image_from_bytes(image_bytes)
     upscaled_image = model.upscale_image(image=source_image, upscale_factor=upscale_factor)
@@ -1099,7 +1099,7 @@ def main() -> None:
                             "id": f"img_{uuid.uuid4().hex}",
                             "image_bytes": upscaled_bytes,
                             "prompt": source_prompt,
-                            "model": "imagegeneration@002",
+                            "model": IMAGEN_UPSCALE_MODEL,
                             "no_text": True,
                             "aspect_ratio": source_aspect_ratio,
                             "resolution": "4K",
