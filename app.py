@@ -666,7 +666,7 @@ def upscale_image_with_vertex(
         return None
 
     vertexai.init(project=project_id, location=location, credentials=credentials)
-    model = ImageGenerationModel.from_pretrained("image-generation-006")
+    model = ImageGenerationModel.from_pretrained("imagegeneration@002")
 
     source_image = _vertex_image_from_bytes(image_bytes)
     upscaled_image = model.upscale_image(image=source_image, upscale_factor=upscale_factor)
@@ -1027,7 +1027,7 @@ def main() -> None:
                             "id": f"img_{uuid.uuid4().hex}",
                             "image_bytes": upscaled_bytes,
                             "prompt": source_prompt,
-                            "model": "image-generation-006",
+                            "model": "imagegeneration@002",
                             "no_text": True,
                             "aspect_ratio": source_aspect_ratio,
                             "resolution": "4K",
