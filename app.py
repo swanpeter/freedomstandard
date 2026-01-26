@@ -928,15 +928,74 @@ def main() -> None:
     with st.sidebar:
         st.header("Upscale (Vertex AI)")
         upscale_factor = st.radio("倍率", ("x2", "x4"), index=1, horizontal=True)
-        if st.button("最新画像を4Kアップスケール"):
-            last_entry = st.session_state.get("last_generated")
-            if not last_entry:
-                st.info("まずは画像を生成してください。")
+        source_choice = st.radio(
+            "アップスケール元",
+            ("アップロード画像", "履歴から選択", "最新生成画像"),
+            index=0,
+        )
+        uploaded_upscale = st.file_uploader(
+            "アップスケールする画像",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=False,
+            key="upscale_upload",
+        )
+
+        selected_history_entry: Optional[Dict[str, object]] = None
+        if source_choice == "履歴から選択":
+            history_entries = st.session_state.get("history") or []
+            if history_entries:
+                labels = []
+                for idx, entry in enumerate(history_entries):
+                    prompt = (entry.get("prompt") or "").strip() or "(未入力)"
+                    labels.append(f"{idx + 1}: {prompt[:40]}")
+                selected_index = st.selectbox(
+                    "履歴を選択",
+                    options=list(range(len(history_entries))),
+                    format_func=lambda i: labels[i],
+                )
+                try:
+                    selected_history_entry = history_entries[int(selected_index)]
+                except (IndexError, ValueError, TypeError):
+                    selected_history_entry = None
             else:
+                st.info("履歴がありません。")
+
+        if st.button("選択画像をアップスケール"):
+            source_bytes = None
+            source_prompt = ""
+            source_aspect_ratio = None
+            source_reference_used = False
+
+            if source_choice == "アップロード画像":
+                data, _mime = _load_uploaded_file(uploaded_upscale)
+                if not data:
+                    st.warning("アップスケールする画像をアップロードしてください。")
+                else:
+                    source_bytes = data
+                    source_prompt = "(uploaded image)"
+            elif source_choice == "履歴から選択":
+                if selected_history_entry and selected_history_entry.get("image_bytes"):
+                    source_bytes = selected_history_entry.get("image_bytes")
+                    source_prompt = selected_history_entry.get("prompt") or ""
+                    source_aspect_ratio = selected_history_entry.get("aspect_ratio")
+                    source_reference_used = bool(selected_history_entry.get("reference_used"))
+                else:
+                    st.warning("履歴から画像を選択してください。")
+            else:
+                last_entry = st.session_state.get("last_generated")
+                if last_entry and last_entry.get("image_bytes"):
+                    source_bytes = last_entry.get("image_bytes")
+                    source_prompt = last_entry.get("prompt") or ""
+                    source_aspect_ratio = last_entry.get("aspect_ratio")
+                    source_reference_used = bool(last_entry.get("reference_used"))
+                else:
+                    st.info("まずは画像を生成してください。")
+
+            if source_bytes:
                 with st.spinner("アップスケール中..."):
                     try:
                         upscaled_bytes = upscale_image_with_vertex(
-                            last_entry.get("image_bytes"),
+                            source_bytes,
                             upscale_factor=upscale_factor,
                             output_format="png",
                         )
@@ -950,12 +1009,12 @@ def main() -> None:
                         {
                             "id": f"img_{uuid.uuid4().hex}",
                             "image_bytes": upscaled_bytes,
-                            "prompt": last_entry.get("prompt") or "",
+                            "prompt": source_prompt,
                             "model": "image-generation-006",
                             "no_text": True,
-                            "aspect_ratio": last_entry.get("aspect_ratio"),
+                            "aspect_ratio": source_aspect_ratio,
                             "resolution": "4K",
-                            "reference_used": bool(last_entry.get("reference_used")),
+                            "reference_used": source_reference_used,
                             "mime_type": image_mime_type,
                             "extension": image_extension,
                             "upscale_factor": upscale_factor,
