@@ -3,6 +3,7 @@ import datetime
 import html
 import io
 import os
+import tempfile
 import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -23,6 +24,9 @@ try:
     from google.genai import types
     from google.cloud import storage
     from google.oauth2 import service_account
+    import vertexai
+    from vertexai.preview.vision_models import Image as VertexImage
+    from vertexai.preview.vision_models import ImageGenerationModel
 except ImportError:
     st.error(
         "必要なライブラリが不足しています。`pip install -r requirements.txt` を実行してください。"
@@ -551,6 +555,119 @@ def upload_image_to_gcs(
         return None, None
 
 
+def get_vertex_ai_settings() -> Tuple[Optional[str], Optional[str], Optional[service_account.Credentials]]:
+    project_id = _normalize_credential(
+        get_secret_value("VERTEX_PROJECT_ID") or os.getenv("VERTEX_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+    )
+    location = _normalize_credential(
+        get_secret_value("VERTEX_LOCATION")
+        or os.getenv("VERTEX_LOCATION")
+        or os.getenv("GOOGLE_CLOUD_LOCATION")
+        or "us-central1"
+    )
+
+    credentials: Optional[service_account.Credentials] = None
+    try:
+        secrets_obj = st.secrets
+    except StreamlitSecretNotFoundError:
+        secrets_obj = None
+    except Exception:
+        secrets_obj = None
+
+    vertex_section = None
+    if isinstance(secrets_obj, dict):
+        vertex_section = secrets_obj.get("vertex_ai")
+    elif secrets_obj is not None:
+        vertex_section = _get_from_container(secrets_obj, "vertex_ai")
+
+    service_account_json = None
+    if vertex_section:
+        service_account_json = _get_from_container(vertex_section, "service_account_json")
+    if service_account_json is None:
+        service_account_json = get_secret_value("VERTEX_SERVICE_ACCOUNT_JSON") or os.getenv("VERTEX_SERVICE_ACCOUNT_JSON")
+
+    if service_account_json:
+        service_account_info: Optional[Dict[str, Any]] = None
+        if isinstance(service_account_json, dict):
+            service_account_info = dict(service_account_json)
+        elif isinstance(service_account_json, (str, bytes)):
+            raw_json = service_account_json.decode("utf-8") if isinstance(service_account_json, bytes) else service_account_json
+            raw_json = raw_json.strip()
+            try:
+                service_account_info = json.loads(raw_json)
+            except json.JSONDecodeError:
+                try:
+                    service_account_info = json.loads(raw_json, strict=False)
+                except json.JSONDecodeError as exc:
+                    st.error(f"VERTEX service_account_json の読み込みに失敗しました: {exc}")
+                    service_account_info = None
+        else:
+            st.error("VERTEX service_account_json の形式が不明です。文字列または辞書で設定してください。")
+
+        if isinstance(service_account_info, dict):
+            try:
+                credentials = service_account.Credentials.from_service_account_info(service_account_info)
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"VERTEX 認証情報の初期化に失敗しました: {exc}")
+                credentials = None
+
+        if not project_id and isinstance(service_account_info, dict):
+            project_id = _normalize_credential(str(service_account_info.get("project_id") or ""))
+
+    return project_id, location, credentials
+
+
+def _vertex_image_from_bytes(image_bytes: bytes) -> VertexImage:
+    if hasattr(VertexImage, "from_bytes"):
+        return VertexImage.from_bytes(image_bytes)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp.write(image_bytes)
+        tmp.flush()
+        temp_path = tmp.name
+    try:
+        return VertexImage.load_from_file(temp_path)
+    finally:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+
+
+def upscale_image_with_vertex(
+    image_bytes: bytes,
+    upscale_factor: str = "x4",
+    output_format: str = "png",
+) -> Optional[bytes]:
+    if not image_bytes:
+        return None
+    project_id, location, credentials = get_vertex_ai_settings()
+    if not project_id:
+        st.warning("VERTEX_PROJECT_ID が未設定です。Streamlit secrets か環境変数で設定してください。")
+        return None
+    if not location:
+        st.warning("VERTEX_LOCATION が未設定です。Streamlit secrets か環境変数で設定してください。")
+        return None
+
+    vertexai.init(project=project_id, location=location, credentials=credentials)
+    model = ImageGenerationModel.from_pretrained("image-generation-006")
+
+    source_image = _vertex_image_from_bytes(image_bytes)
+    upscaled_image = model.upscale_image(image=source_image, upscale_factor=upscale_factor)
+
+    normalized_format = (output_format or "png").lower().lstrip(".") or "png"
+    with tempfile.NamedTemporaryFile(suffix=f".{normalized_format}", delete=False) as tmp:
+        temp_path = tmp.name
+    try:
+        upscaled_image.save(temp_path)
+        with open(temp_path, "rb") as file_handle:
+            return file_handle.read()
+    finally:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+
+
 def init_history() -> None:
     if "history" not in st.session_state:
         st.session_state.history: List[Dict[str, object]] = []
@@ -780,6 +897,9 @@ def render_history() -> None:
         model_name = entry.get("model")
         if model_name:
             meta_bits.append(f"Model: {model_name}")
+        upscale_factor = entry.get("upscale_factor")
+        if upscale_factor:
+            meta_bits.append(f"Upscale: {upscale_factor}")
         if entry.get("reference_used"):
             meta_bits.append("Ref: yes")
         if meta_bits:
@@ -804,6 +924,44 @@ def main() -> None:
     require_login()
 
     st.title("FreedomStandard")
+
+    with st.sidebar:
+        st.header("Upscale (Vertex AI)")
+        upscale_factor = st.radio("倍率", ("x2", "x4"), index=1, horizontal=True)
+        if st.button("最新画像を4Kアップスケール"):
+            last_entry = st.session_state.get("last_generated")
+            if not last_entry:
+                st.info("まずは画像を生成してください。")
+            else:
+                with st.spinner("アップスケール中..."):
+                    try:
+                        upscaled_bytes = upscale_image_with_vertex(
+                            last_entry.get("image_bytes"),
+                            upscale_factor=upscale_factor,
+                            output_format="png",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"アップスケールに失敗しました: {exc}")
+                        upscaled_bytes = None
+                if upscaled_bytes:
+                    image_extension, image_mime_type = detect_image_format(upscaled_bytes)
+                    st.session_state.history.insert(
+                        0,
+                        {
+                            "id": f"img_{uuid.uuid4().hex}",
+                            "image_bytes": upscaled_bytes,
+                            "prompt": last_entry.get("prompt") or "",
+                            "model": "image-generation-006",
+                            "no_text": True,
+                            "aspect_ratio": last_entry.get("aspect_ratio"),
+                            "resolution": "4K",
+                            "reference_used": bool(last_entry.get("reference_used")),
+                            "mime_type": image_mime_type,
+                            "extension": image_extension,
+                            "upscale_factor": upscale_factor,
+                        },
+                    )
+                    st.success("アップスケール完了")
 
     api_key = load_configured_api_key()
 
@@ -934,6 +1092,13 @@ def main() -> None:
                 "extension": image_extension,
             },
         )
+        st.session_state["last_generated"] = {
+            "image_bytes": image_bytes,
+            "prompt": user_prompt,
+            "aspect_ratio": aspect_ratio,
+            "resolution": resolution_label,
+            "reference_used": bool(ref_files),
+        }
         st.success("生成完了")
 
     render_history()
