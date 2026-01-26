@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import json
 from PIL import Image
+import requests
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -343,7 +344,7 @@ def collect_image_bytes(response: object) -> Optional[bytes]:
                 return decoded
 
             for key, value in current.items():
-                if key in {"data", "image", "blob"}:
+                if key in {"data", "image", "blob", "bytesBase64Encoded"}:
                     decoded = decode_image_data(value)
                     if decoded:
                         return decoded
@@ -634,6 +635,36 @@ def get_vertex_ai_settings() -> Tuple[Optional[str], Optional[str], Optional[ser
     return project_id, location, credentials
 
 
+def get_vertex_ai_api_key() -> Optional[str]:
+    api_key = (
+        get_secret_value("VERTEX_API_KEY")
+        or os.getenv("VERTEX_API_KEY")
+        or get_secret_value("GOOGLE_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+    )
+    if isinstance(api_key, str) and api_key.strip():
+        return api_key.strip()
+
+    try:
+        secrets_obj = st.secrets
+    except StreamlitSecretNotFoundError:
+        return None
+    except Exception:
+        return None
+
+    for section_key in ("vertex_ai", "gcp"):
+        section = None
+        if isinstance(secrets_obj, dict):
+            section = secrets_obj.get(section_key)
+        else:
+            section = _get_from_container(secrets_obj, section_key)
+        if section:
+            candidate = _get_from_container(section, "api_key")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
 def _vertex_image_from_bytes(image_bytes: bytes) -> VertexImage:
     if hasattr(VertexImage, "from_bytes"):
         return VertexImage.from_bytes(image_bytes)
@@ -657,7 +688,48 @@ def upscale_image_with_vertex(
 ) -> Optional[bytes]:
     if not image_bytes:
         return None
+    api_key = get_vertex_ai_api_key()
     project_id, location, credentials = get_vertex_ai_settings()
+    if api_key:
+        endpoint = None
+        if project_id and location:
+            endpoint = (
+                f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}"
+                f"/locations/{location}/publishers/google/models/imagegeneration@002:predict"
+            )
+        else:
+            endpoint = "https://aiplatform.googleapis.com/v1/publishers/google/models/imagegeneration@002:predict"
+
+        payload = {
+            "instances": [
+                {
+                    "prompt": "",
+                    "image": {
+                        "bytesBase64Encoded": base64.b64encode(image_bytes).decode("utf-8")
+                    },
+                }
+            ],
+            "parameters": {
+                "sampleCount": 1,
+                "mode": "upscale",
+                "upscaleConfig": {
+                    "upscaleFactor": upscale_factor,
+                },
+            },
+        }
+        response = requests.post(
+            f"{endpoint}?key={api_key}",
+            json=payload,
+            timeout=120,
+        )
+        if not response.ok:
+            raise RuntimeError(f"Vertex AI API error: {response.status_code} {response.text}")
+        response_json = response.json()
+        extracted = collect_image_bytes(response_json)
+        if extracted:
+            return extracted
+        raise RuntimeError("Vertex AI API のレスポンスに画像データがありません。")
+
     if not project_id:
         st.warning("VERTEX_PROJECT_ID が未設定です。Streamlit secrets か環境変数で設定してください。")
         return None
