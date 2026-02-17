@@ -18,6 +18,7 @@ I2I_MODEL_ID = "ep-20251208110124-9jp7r"
 I2I_MAX_REFERENCES = 14
 I2I_OUTPUT_DIR = os.path.join(os.getcwd(), "outputs")
 I2I_DEFAULT_PROMPT = "masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus"
+I2I_RESOLUTION_OPTIONS = ("1K", "2K", "4K")
 
 
 @st.cache_resource
@@ -68,13 +69,14 @@ def generate_image(
     client: Ark,
     image_data_urls: List[str],
     prompt: str,
+    resolution: str,
 ) -> Tuple[str, bytes, str]:
     request_args = {
         "model": I2I_MODEL_ID,
         "prompt": prompt,
         "sequential_image_generation": "disabled",
         "response_format": "url",
-        "size": "2K",
+        "size": resolution,
         "stream": False,
         "watermark": False,
     }
@@ -114,6 +116,7 @@ def main() -> None:
         uploaded_files = uploaded_files[:I2I_MAX_REFERENCES]
 
     prompt = st.text_area("プロンプト", value=I2I_DEFAULT_PROMPT, height=180)
+    resolution = st.radio("解像度", I2I_RESOLUTION_OPTIONS, index=1, horizontal=True)
     generate_clicked = st.button("生成", type="primary")
 
     if generate_clicked:
@@ -131,7 +134,12 @@ def main() -> None:
         client = get_client()
         try:
             with st.spinner("生成中..."):
-                saved_path, image_bytes, mime_type = generate_image(client, image_data_urls, prompt.strip())
+                saved_path, image_bytes, mime_type = generate_image(
+                    client,
+                    image_data_urls,
+                    prompt.strip(),
+                    resolution,
+                )
             st.session_state.generated_history.insert(
                 0,
                 {
@@ -140,6 +148,7 @@ def main() -> None:
                     "file_name": os.path.basename(saved_path),
                     "mime_type": mime_type,
                     "prompt": prompt.strip(),
+                    "resolution": resolution,
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 },
             )
@@ -155,6 +164,7 @@ def main() -> None:
             file_name = str(entry.get("file_name", "")) or f"generated_image_{idx + 1}.jpeg"
             mime_type = str(entry.get("mime_type", "image/jpeg")) or "image/jpeg"
             prompt_text = str(entry.get("prompt", ""))
+            resolution_text = str(entry.get("resolution", ""))
             created_at = str(entry.get("created_at", ""))
 
             image_bytes = entry.get("image_bytes")
@@ -179,6 +189,8 @@ def main() -> None:
 
             if prompt_text:
                 st.caption(f"Prompt: {prompt_text}")
+            if resolution_text:
+                st.caption(f"Resolution: {resolution_text}")
 
             if normalized_bytes:
                 st.download_button(
