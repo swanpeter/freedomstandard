@@ -2,7 +2,7 @@ import base64
 import os
 import time
 from io import BytesIO
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -100,10 +100,7 @@ def main() -> None:
         if st.button("ログアウト"):
             logout()
 
-    st.session_state.setdefault("last_saved_path", None)
-    st.session_state.setdefault("last_image_bytes", None)
-    st.session_state.setdefault("last_image_name", None)
-    st.session_state.setdefault("last_image_mime", "image/jpeg")
+    st.session_state.setdefault("generated_history", [])
 
     uploaded_files = st.file_uploader(
         "参照画像 (最大14枚)",
@@ -135,27 +132,62 @@ def main() -> None:
         try:
             with st.spinner("生成中..."):
                 saved_path, image_bytes, mime_type = generate_image(client, image_data_urls, prompt.strip())
-            st.session_state.last_saved_path = saved_path
-            st.session_state.last_image_bytes = image_bytes
-            st.session_state.last_image_name = os.path.basename(saved_path)
-            st.session_state.last_image_mime = mime_type
+            st.session_state.generated_history.insert(
+                0,
+                {
+                    "saved_path": saved_path,
+                    "image_bytes": image_bytes,
+                    "file_name": os.path.basename(saved_path),
+                    "mime_type": mime_type,
+                    "prompt": prompt.strip(),
+                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
             st.success("生成が完了しました。")
         except Exception as exc:  # noqa: BLE001
             st.error(str(exc))
 
-    last_saved_path = st.session_state.get("last_saved_path")
-    if last_saved_path:
-        st.image(last_saved_path, caption="生成画像", use_container_width=True)
-        image_bytes = st.session_state.get("last_image_bytes")
-        file_name = st.session_state.get("last_image_name") or "generated_image.jpeg"
-        mime_type = st.session_state.get("last_image_mime") or "image/jpeg"
-        if isinstance(image_bytes, (bytes, bytearray, memoryview)):
-            st.download_button(
-                "ダウンロード",
-                data=bytes(image_bytes),
-                file_name=file_name,
-                mime=mime_type,
-            )
+    history_entries = st.session_state.get("generated_history", [])
+    if history_entries:
+        st.subheader("生成履歴")
+        for idx, entry in enumerate(history_entries):
+            saved_path = str(entry.get("saved_path", ""))
+            file_name = str(entry.get("file_name", "")) or f"generated_image_{idx + 1}.jpeg"
+            mime_type = str(entry.get("mime_type", "image/jpeg")) or "image/jpeg"
+            prompt_text = str(entry.get("prompt", ""))
+            created_at = str(entry.get("created_at", ""))
+
+            image_bytes = entry.get("image_bytes")
+            normalized_bytes: bytes
+            if isinstance(image_bytes, (bytes, bytearray, memoryview)):
+                normalized_bytes = bytes(image_bytes)
+                st.image(
+                    normalized_bytes,
+                    caption=f"{created_at} / {file_name}",
+                    use_container_width=True,
+                )
+            elif saved_path and os.path.exists(saved_path):
+                st.image(saved_path, caption=f"{created_at} / {file_name}", use_container_width=True)
+                try:
+                    with open(saved_path, "rb") as file_handle:
+                        normalized_bytes = file_handle.read()
+                except Exception:
+                    normalized_bytes = b""
+            else:
+                st.warning(f"画像ファイルが見つかりません: {file_name}")
+                normalized_bytes = b""
+
+            if prompt_text:
+                st.caption(f"Prompt: {prompt_text}")
+
+            if normalized_bytes:
+                st.download_button(
+                    "画像をダウンロード",
+                    data=normalized_bytes,
+                    file_name=file_name,
+                    mime=mime_type,
+                    key=f"download_generated_image_{idx}",
+                )
 
 
 if __name__ == "__main__":
