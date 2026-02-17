@@ -19,6 +19,7 @@ I2I_MAX_REFERENCES = 14
 I2I_OUTPUT_DIR = os.path.join(os.getcwd(), "outputs")
 I2I_DEFAULT_PROMPT = "masterpiece, best quality, ultra-detailed, photorealistic, 8k, sharp focus"
 I2I_RESOLUTION_OPTIONS = ("1K", "2K", "4K")
+I2I_ASPECT_RATIO_OPTIONS = ("1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "9:21")
 
 
 @st.cache_resource
@@ -70,6 +71,7 @@ def generate_image(
     image_data_urls: List[str],
     prompt: str,
     resolution: str,
+    aspect_ratio: str,
 ) -> Tuple[str, bytes, str]:
     request_args = {
         "model": I2I_MODEL_ID,
@@ -77,13 +79,22 @@ def generate_image(
         "sequential_image_generation": "disabled",
         "response_format": "url",
         "size": resolution,
+        "aspect_ratio": aspect_ratio,
         "stream": False,
         "watermark": False,
     }
     if image_data_urls:
         request_args["image"] = image_data_urls
 
-    response = client.images.generate(**request_args)
+    try:
+        response = client.images.generate(**request_args)
+    except Exception as exc:
+        error_text = str(exc).lower()
+        if "aspect" in error_text and "ratio" in error_text:
+            request_args.pop("aspect_ratio", None)
+            response = client.images.generate(**request_args)
+        else:
+            raise
     first_item = response.data[0] if getattr(response, "data", None) else None
     image_url = getattr(first_item, "url", None)
     if not image_url:
@@ -117,6 +128,7 @@ def main() -> None:
 
     prompt = st.text_area("プロンプト", value=I2I_DEFAULT_PROMPT, height=180)
     resolution = st.radio("解像度", I2I_RESOLUTION_OPTIONS, index=1, horizontal=True)
+    aspect_ratio = st.selectbox("アスペクト比", I2I_ASPECT_RATIO_OPTIONS, index=0)
     generate_clicked = st.button("生成", type="primary")
 
     if generate_clicked:
@@ -139,6 +151,7 @@ def main() -> None:
                     image_data_urls,
                     prompt.strip(),
                     resolution,
+                    aspect_ratio,
                 )
             st.session_state.generated_history.insert(
                 0,
@@ -149,6 +162,7 @@ def main() -> None:
                     "mime_type": mime_type,
                     "prompt": prompt.strip(),
                     "resolution": resolution,
+                    "aspect_ratio": aspect_ratio,
                     "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 },
             )
@@ -165,6 +179,7 @@ def main() -> None:
             mime_type = str(entry.get("mime_type", "image/jpeg")) or "image/jpeg"
             prompt_text = str(entry.get("prompt", ""))
             resolution_text = str(entry.get("resolution", ""))
+            aspect_ratio_text = str(entry.get("aspect_ratio", ""))
             created_at = str(entry.get("created_at", ""))
 
             image_bytes = entry.get("image_bytes")
@@ -191,6 +206,8 @@ def main() -> None:
                 st.caption(f"Prompt: {prompt_text}")
             if resolution_text:
                 st.caption(f"Resolution: {resolution_text}")
+            if aspect_ratio_text:
+                st.caption(f"Aspect: {aspect_ratio_text}")
 
             if normalized_bytes:
                 st.download_button(
