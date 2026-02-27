@@ -60,7 +60,8 @@ def rerun_app() -> None:
 
 
 TITLE = "Gemini 画像生成"
-MODEL_NAME = "models/gemini-3-pro-image-preview"
+MODEL_NAME = "models/gemini-3.1-flash-preview"
+##MODEL_NAME = "models/gemini-3-pro-image-preview"
 IMAGE_ASPECT_RATIO = "16:9"
 IMAGE_ASPECT_RATIO_OPTIONS = ("16:9", "9:16", "1:1")
 DEFAULT_PROMPT_SUFFIX = (
