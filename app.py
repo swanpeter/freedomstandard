@@ -1002,7 +1002,7 @@ def main() -> None:
     init_history()
     require_login()
 
-    st.title("FreedomStandard")
+    st.title("Gen")
 
     with st.sidebar:
         st.header("Upscale (Vertex AI)")
