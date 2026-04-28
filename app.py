@@ -66,9 +66,12 @@ def rerun_app() -> None:
 
 TITLE = "Gemini 画像生成"
 
-MODEL_NAME = "models/gemini-2.5-flash-image"
-##MODEL_NAME = "models/gemini-3.1-flash-image-preview"
-##MODEL_NAME = "models/gemini-3-pro-image-preview"
+MODEL_NAME_OPTIONS = (
+    "models/gemini-2.5-flash-image",
+    "models/gemini-3.1-flash-image-preview",
+    "models/gemini-3-pro-image-preview",
+)
+MODEL_NAME = MODEL_NAME_OPTIONS[0]
 IMAGEN_UPSCALE_MODEL = "imagen-4.0-upscale-preview"
 IMAGE_ASPECT_RATIO = "16:9"
 IMAGE_ASPECT_RATIO_OPTIONS = ("16:9", "9:16", "1:1")
@@ -1006,6 +1009,14 @@ def main() -> None:
     st.title("Gen")
 
     with st.sidebar:
+        st.header("Generate")
+        selected_model_name = st.selectbox(
+            "モデル",
+            MODEL_NAME_OPTIONS,
+            index=MODEL_NAME_OPTIONS.index(MODEL_NAME),
+        )
+
+        st.divider()
         st.header("Upscale (Vertex AI)")
         upscale_factor = st.radio("倍率", ("x2", "x4"), index=1, horizontal=True)
         source_choice = st.radio(
@@ -1167,7 +1178,7 @@ def main() -> None:
             if not include_size and image_size_key:
                 cfg_kwargs.pop(image_size_key, None)
             return client.models.generate_content(
-                model=MODEL_NAME,
+                model=selected_model_name,
                 contents=contents_for_request,
                 config=types.GenerateContentConfig(
                     response_modalities=["IMAGE"],
@@ -1222,7 +1233,7 @@ def main() -> None:
                 "id": f"img_{uuid.uuid4().hex}",
                 "image_bytes": image_bytes,
                 "prompt": user_prompt,
-                "model": MODEL_NAME,
+                "model": selected_model_name,
                 "no_text": True,
                 "aspect_ratio": aspect_ratio,
                 "resolution": resolution_label,
