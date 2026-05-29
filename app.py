@@ -68,11 +68,11 @@ TITLE = "Gemini 画像生成"
 
 MODEL_NAME_OPTIONS = (
     "models/gemini-2.5-flash-image",
-    "models/gemini-3.1-flash-image-preview",
-    "models/gemini-3-pro-image-preview",
+    "models/gemini-3.1-flash-image",
+    "models/gemini-3-pro-image",
 )
 MODEL_NAME = MODEL_NAME_OPTIONS[0]
-IMAGEN_UPSCALE_MODEL = "imagen-4.0-upscale-preview"
+IMAGEN_UPSCALE_MODEL = "imagen-4.0-upscale"
 IMAGE_ASPECT_RATIO = "16:9"
 IMAGE_ASPECT_RATIO_OPTIONS = ("16:9", "9:16", "1:1")
 DEFAULT_PROMPT_SUFFIX = (
